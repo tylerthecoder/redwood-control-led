@@ -1,7 +1,7 @@
 // Global variable to store the LED control state
 import { ledState, updateState, type LedState } from "./state";
 
-const BUFFER_DURATION_SECONDS = 10;
+const BUFFER_DURATION_SECONDS = 1; // 1 second buffers to fit in ESP32 RAM
 const NUM_LEDS = 60;
 
 // Convert hex color string to 24-bit RGB number

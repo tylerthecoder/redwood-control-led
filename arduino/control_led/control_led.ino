@@ -1,5 +1,6 @@
 #include <WiFi.h>  // For ESP32 - use #include <ESP8266WiFi.h> for ESP8266
 #include <HTTPClient.h>
+#include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include <FastLED.h>
 
@@ -23,8 +24,9 @@ CRGB leds[NUM_LEDS];
 String currentMode = "simple";
 
 // Format mode state
-unsigned long formatFrames[36000];  // Current buffer: 600 frames * 60 LEDs = 36000 numbers
-unsigned long formatNextFrames[36000];  // Next buffer (loaded in background)
+// 1 second buffers at 60fps = 60 frames * 60 LEDs = 3600 numbers per buffer
+unsigned long formatFrames[3600];  // Current buffer: 60 frames * 60 LEDs = 3600 numbers
+unsigned long formatNextFrames[3600];  // Next buffer (loaded in background)
 int formatFrameCount = 0;
 int formatNextFrameCount = 0;
 int formatFramerate = 60;
@@ -145,8 +147,11 @@ void handleFormatMode() {
 
 // Notify server that buffer is complete
 void notifyBufferComplete() {
-  WiFiClient client;
+  WiFiClientSecure client;
   HTTPClient http;
+
+  // Skip certificate validation for now (use client.setInsecure() if needed)
+  client.setInsecure();
 
   String url = String(serverHost) + completePath;
 
@@ -184,10 +189,15 @@ void loadFormatBuffer(JsonArray bufferArray, unsigned long* targetBuffer, int& f
 
 // Check and update LED state from API
 void checkLedState() {
+  WiFiClientSecure client;
   HTTPClient http;
+
+  // Skip certificate validation for now
+  client.setInsecure();
+
   String url = String(serverHost) + apiPath;
 
-  http.begin(url);
+  http.begin(client, url);
   int httpCode = http.GET();
 
   if (httpCode > 0 && httpCode == HTTP_CODE_OK) {

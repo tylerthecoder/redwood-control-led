@@ -63,8 +63,13 @@ export default function Home() {
         setLoopState(data);
       } else if (data.mode === "format") {
         setMode("format");
-        setFormatState(data);
-        setFormatText(data.frames.join("\n"));
+        setFormatState({
+          mode: "format",
+          frames: [], // Buffers are stored on server, not frames
+          framerate: data.framerate || 60,
+        });
+        // Don't try to display buffers as text - they're numeric
+        setFormatText("");
       }
     } catch (error) {
       console.error("Error fetching state:", error);
@@ -111,18 +116,31 @@ export default function Home() {
     setLoading(true);
     setFormatError(null);
     try {
-      const newState = { ...formatState, ...updates };
+      // If frames are provided, send them (API will convert to buffers)
+      // Otherwise, just send the updates
+      const payload = updates.frames
+        ? { mode: "format", frames: updates.frames, framerate: updates.framerate ?? formatState.framerate }
+        : { mode: "format", ...updates };
+
       const response = await fetch("/api/control", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(newState),
+        body: JSON.stringify(payload),
       });
       const data = await response.json();
       if (data.error) {
         setFormatError(data.error);
       } else {
-        setFormatState(data);
-        setFormatText(data.frames.join("\n"));
+        // Update state - API returns buffers, not frames
+        setFormatState({
+          mode: "format",
+          frames: updates.frames || formatState.frames, // Keep local frames if we sent them
+          framerate: data.framerate || formatState.framerate,
+        });
+        // Only update formatText if we have frames (from user input)
+        if (updates.frames) {
+          setFormatText(updates.frames.join("\n"));
+        }
       }
     } catch (error) {
       console.error("Error updating format mode:", error);
