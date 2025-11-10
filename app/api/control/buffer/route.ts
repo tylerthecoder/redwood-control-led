@@ -1,4 +1,5 @@
-// Buffer endpoint - returns a specific buffer by index
+// Buffer endpoint - returns a specific buffer by index with next buffer index
+// Server controls the buffer sequencing, not the client
 import { ledState } from "../state";
 
 export async function GET(request: Request) {
@@ -23,7 +24,6 @@ export async function GET(request: Request) {
         return Response.json(
             {
                 error: "No buffers available",
-                totalBuffers: 0,
                 message: "Script mode has no buffers loaded. Upload animation first."
             },
             { status: 400 }
@@ -34,7 +34,6 @@ export async function GET(request: Request) {
         return Response.json(
             {
                 error: "index parameter is required",
-                totalBuffers: totalBuffers,
                 message: "Please provide ?index=N in the URL"
             },
             { status: 400 }
@@ -42,20 +41,18 @@ export async function GET(request: Request) {
     }
 
     const requestedIndex = parseInt(indexParam, 10);
-    if (isNaN(requestedIndex) || requestedIndex < 0 || requestedIndex >= totalBuffers) {
-        return Response.json(
-            {
-                error: `Invalid index: ${indexParam}. Must be between 0 and ${totalBuffers - 1}`,
-                requestedIndex: indexParam,
-                totalBuffers: totalBuffers,
-                validRange: `0-${totalBuffers - 1}`,
-                message: "Buffer index out of range. Animation may have changed."
-            },
-            { status: 400 }
-        );
+
+    // If index is invalid or out of range, return the first buffer (index 0)
+    // This allows automatic wrapping and recovery from desync
+    let bufferIndex = 0;
+    if (!isNaN(requestedIndex) && requestedIndex >= 0 && requestedIndex < totalBuffers) {
+        bufferIndex = requestedIndex;
     }
 
-    const requestedBuffer = scriptState.buffers[requestedIndex] || [];
+    const requestedBuffer = scriptState.buffers[bufferIndex] || [];
+
+    // Calculate next buffer index (wrap around)
+    const nextBufferIndex = (bufferIndex + 1) % totalBuffers;
 
     // Convert buffer to hex string for more efficient transfer
     // Format: continuous hex string "FF0000FF0000..." (6 chars per color)
@@ -63,8 +60,8 @@ export async function GET(request: Request) {
 
     return Response.json({
         buffer: hexBuffer,  // Hex string instead of number array
-        bufferIndex: requestedIndex,
-        totalBuffers: totalBuffers,
+        buffer_index: bufferIndex,
+        next_buffer_index: nextBufferIndex,
         framerate: scriptState.framerate,
         format: 'hex',  // Indicate format for client
     });

@@ -190,13 +190,11 @@ export async function POST(request: Request) {
 
 export async function GET() {
     // Return current LED state with mode
-    // For script mode, only return mode, totalBuffers, and framerate (no buffers)
+    // For script mode, only return mode and framerate (buffer control is on server)
     if (ledState.mode === "script") {
-        const scriptState = ledState;
         return Response.json({
             mode: "script",
-            totalBuffers: scriptState.buffers.length,
-            framerate: scriptState.framerate,
+            framerate: ledState.framerate,
         });
     }
 

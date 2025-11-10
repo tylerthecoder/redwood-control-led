@@ -235,10 +235,10 @@ void loopLoopMode() {
 }
 
 // ============================================================================
-// CUSTOM MODE
+// SCRIPT MODE
 // ============================================================================
 
-// Custom mode state
+// Script mode state
 // 0.5 second buffers at 60fps = 30 frames * 60 LEDs = MAX_BUFFER_COLORS numbers per buffer
 unsigned long formatFrames[MAX_BUFFER_COLORS];  // Current buffer
 unsigned long formatNextFrames[MAX_BUFFER_COLORS];  // Next buffer (loaded in background)
@@ -249,7 +249,7 @@ unsigned long formatFrameDelay = 0;
 unsigned long lastFormatFrameUpdate = 0;
 int currentFormatFrameIndex = 0;  // Frame index within current buffer
 int currentBufferIndex = 0;       // Which buffer we're currently playing
-int totalBuffers = 0;              // Total number of buffers in sequence
+int nextBufferIndex = 1;          // Which buffer to fetch next (server-controlled)
 bool formatBufferLoaded = false;
 bool formatNextBufferLoaded = false;
 
@@ -272,7 +272,7 @@ void copyBuffer(unsigned long* dest, unsigned long* src, int frameCount) {
 
 // Load format buffer from hex string (optimized format)
 void loadFormatBufferFromHex(String hexString, unsigned long* targetBuffer, int& frameCount) {
-  Serial.print("[CustomMode] Loading buffer from hex string (length: ");
+  Serial.print("[ScriptMode] Loading buffer from hex string (length: ");
   Serial.print(hexString.length());
   Serial.println(")");
 
@@ -292,7 +292,7 @@ void loadFormatBufferFromHex(String hexString, unsigned long* targetBuffer, int&
   }
 
   frameCount = frameCount / NUM_LEDS;  // Convert to frame count
-  Serial.print("[CustomMode] Loaded ");
+  Serial.print("[ScriptMode] Loaded ");
   Serial.print(index);
   Serial.print(" color values = ");
   Serial.print(frameCount);
@@ -301,7 +301,7 @@ void loadFormatBufferFromHex(String hexString, unsigned long* targetBuffer, int&
 
 // Load format buffer from JSON array (legacy format, kept for compatibility)
 void loadFormatBufferFromArray(JsonArray bufferArray, unsigned long* targetBuffer, int& frameCount) {
-  Serial.print("[CustomMode] Loading buffer from JSON array (size: ");
+  Serial.print("[ScriptMode] Loading buffer from JSON array (size: ");
   Serial.print(bufferArray.size());
   Serial.println(")");
 
@@ -316,17 +316,17 @@ void loadFormatBufferFromArray(JsonArray bufferArray, unsigned long* targetBuffe
         frameCount++;
         loadedCount++;
       } else {
-        Serial.println("[CustomMode] WARNING: Buffer overflow prevented - data truncated!");
+        Serial.println("[ScriptMode] WARNING: Buffer overflow prevented - data truncated!");
         break;
       }
     } else {
-      Serial.print("[CustomMode] Warning: Skipping non-numeric value at index ");
+      Serial.print("[ScriptMode] Warning: Skipping non-numeric value at index ");
       Serial.println(index);
     }
   }
 
   frameCount = frameCount / NUM_LEDS;  // Convert to frame count
-  Serial.print("[CustomMode] Loaded ");
+  Serial.print("[ScriptMode] Loaded ");
   Serial.print(loadedCount);
   Serial.print(" color values = ");
   Serial.print(frameCount);
@@ -337,7 +337,7 @@ void loadFormatBufferFromArray(JsonArray bufferArray, unsigned long* targetBuffe
 void displayFormatFrame(int frameIndex) {
   // Bounds check to prevent reading garbage memory
   if (frameIndex < 0 || frameIndex >= formatFrameCount) {
-    Serial.print("[CustomMode] ERROR: Invalid frame index ");
+    Serial.print("[ScriptMode] ERROR: Invalid frame index ");
     Serial.print(frameIndex);
     Serial.print(", max is ");
     Serial.println(formatFrameCount - 1);
@@ -357,7 +357,7 @@ bool requestBufferByIndex(int bufferIndex) {
   unsigned long fetchStartTime = millis();
 
   Serial.println("====================================");
-  Serial.print("[CustomMode] 🚀 BUFFER FETCH START - Buffer index ");
+  Serial.print("[ScriptMode] 🚀 BUFFER FETCH START - Buffer index ");
   Serial.print(bufferIndex);
   Serial.print(" at ");
   Serial.print(fetchStartTime);
@@ -373,7 +373,7 @@ bool requestBufferByIndex(int bufferIndex) {
   unsigned long validationTime = millis() - validationStart;
 
   if (bufferIndex < 0 || bufferIndex >= currentTotalBuffers) {
-    Serial.print("[CustomMode] ERROR: Buffer index ");
+    Serial.print("[ScriptMode] ERROR: Buffer index ");
     Serial.print(bufferIndex);
     Serial.print(" out of range (0-");
     Serial.print(currentTotalBuffers - 1);
@@ -386,7 +386,7 @@ bool requestBufferByIndex(int bufferIndex) {
     return false;
   }
 
-  Serial.print("[CustomMode] ✓ Validation: ");
+  Serial.print("[ScriptMode] ✓ Validation: ");
   Serial.print(validationTime);
   Serial.print("ms (buffer ");
   Serial.print(bufferIndex);
@@ -397,20 +397,20 @@ bool requestBufferByIndex(int bufferIndex) {
   // Initialize persistent client on first use
   unsigned long initStart = millis();
   if (!persistentBufferClientInitialized) {
-    Serial.println("[CustomMode] 🔧 Initializing persistent HTTP client...");
+    Serial.println("[ScriptMode] 🔧 Initializing persistent HTTP client...");
     persistentBufferClient.setInsecure();
     persistentBufferClient.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_SEC);
     persistentBufferClientInitialized = true;
     unsigned long initTime = millis() - initStart;
-    Serial.print("[CustomMode] ✓ Client initialized in ");
+    Serial.print("[ScriptMode] ✓ Client initialized in ");
     Serial.print(initTime);
     Serial.println("ms");
   } else {
-    Serial.println("[CustomMode] ♻️  Reusing existing HTTP connection");
+    Serial.println("[ScriptMode] ♻️  Reusing existing HTTP connection");
   }
 
   String url = String(serverHost) + bufferPath + "?index=" + String(bufferIndex);
-  Serial.print("[CustomMode] 🌐 URL: ");
+  Serial.print("[ScriptMode] 🌐 URL: ");
   Serial.println(url);
 
   // Begin connection
@@ -419,77 +419,73 @@ bool requestBufferByIndex(int bufferIndex) {
   persistentBufferHttp.addHeader("Connection", "keep-alive");
   persistentBufferHttp.setReuse(true);  // Enable connection reuse
   unsigned long beginTime = millis() - beginStart;
-  Serial.print("[CustomMode] ✓ http.begin(): ");
+  Serial.print("[ScriptMode] ✓ http.begin(): ");
   Serial.print(beginTime);
   Serial.println("ms");
 
   // Send GET request
-  Serial.println("[CustomMode] 📤 Sending GET request...");
+  Serial.println("[ScriptMode] 📤 Sending GET request...");
   unsigned long requestStart = millis();
   int httpCode = persistentBufferHttp.GET();
   unsigned long requestTime = millis() - requestStart;
   unsigned long totalTime = millis() - fetchStartTime;
 
   Serial.println("------------------------------------");
-  Serial.print("[CustomMode] 📥 HTTP Response: ");
+  Serial.print("[ScriptMode] 📥 HTTP Response: ");
   Serial.println(httpCode);
-  Serial.print("[CustomMode] ⏱️  Request time: ");
+  Serial.print("[ScriptMode] ⏱️  Request time: ");
   Serial.print(requestTime);
   Serial.println("ms");
-  Serial.print("[CustomMode] ⏱️  Total time so far: ");
+  Serial.print("[ScriptMode] ⏱️  Total time so far: ");
   Serial.print(totalTime);
   Serial.println("ms");
 
   if (httpCode > 0 && httpCode == HTTP_CODE_OK) {
     // Read payload
-    Serial.println("[CustomMode] 📖 Reading response payload...");
+    Serial.println("[ScriptMode] 📖 Reading response payload...");
     unsigned long payloadStart = millis();
     String payload = persistentBufferHttp.getString();
     unsigned long payloadTime = millis() - payloadStart;
 
-    Serial.print("[CustomMode] ✓ Payload read: ");
+    Serial.print("[ScriptMode] ✓ Payload read: ");
     Serial.print(payload.length());
     Serial.print(" bytes in ");
     Serial.print(payloadTime);
     Serial.println("ms");
 
     // Parse JSON
-    Serial.println("[CustomMode] 🔍 Parsing JSON...");
+    Serial.println("[ScriptMode] 🔍 Parsing JSON...");
     unsigned long parseStart = millis();
     DynamicJsonDocument doc(JSON_DOC_SIZE_BUFFER);
     DeserializationError error = deserializeJson(doc, payload);
     unsigned long parseTime = millis() - parseStart;
 
-    Serial.print("[CustomMode] ✓ JSON parsed in ");
+    Serial.print("[ScriptMode] ✓ JSON parsed in ");
     Serial.print(parseTime);
     Serial.println("ms");
 
     if (!error) {
-      int receivedIndex = doc["bufferIndex"] | -1;
-      int receivedTotal = doc["totalBuffers"] | 0;
+      int receivedIndex = doc["buffer_index"] | -1;
+      int receivedNextIndex = doc["next_buffer_index"] | 0;
       String format = doc["format"] | "array";  // Check format type
 
-      Serial.print("[CustomMode] 📦 Buffer ");
+      Serial.print("[ScriptMode] 📦 Buffer ");
       Serial.print(receivedIndex);
-      Serial.print("/");
-      Serial.print(receivedTotal);
+      Serial.print(", Next: ");
+      Serial.print(receivedNextIndex);
       Serial.print(", Format: ");
       Serial.println(format);
 
-      // Update total buffers if we got new info
-      if (receivedTotal > 0) {
-        if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
-          if (totalBuffers == 0 || totalBuffers != receivedTotal) {
-            totalBuffers = receivedTotal;
-            Serial.print("[CustomMode] Updated total buffers to ");
-            Serial.println(totalBuffers);
-          }
-          xSemaphoreGive(stateMutex);
-        }
+      // Update next buffer index from server
+      if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
+        nextBufferIndex = receivedNextIndex;
+        Serial.print("[ScriptMode] Server says next buffer is ");
+        Serial.println(nextBufferIndex);
+        xSemaphoreGive(stateMutex);
       }
 
       // Load the buffer into next buffer slot using appropriate parser
-      Serial.println("[CustomMode] 💾 Loading buffer data...");
+      Serial.println("[ScriptMode] 💾 Loading buffer data...");
       unsigned long loadStart = millis();
 
       if (format == "hex") {
@@ -503,7 +499,7 @@ bool requestBufferByIndex(int bufferIndex) {
       }
 
       unsigned long loadTime = millis() - loadStart;
-      Serial.print("[CustomMode] ✓ Buffer loaded in ");
+      Serial.print("[ScriptMode] ✓ Buffer loaded in ");
       Serial.print(loadTime);
       Serial.println("ms");
 
@@ -515,10 +511,10 @@ bool requestBufferByIndex(int bufferIndex) {
 
       unsigned long finalTotalTime = millis() - fetchStartTime;
       Serial.println("====================================");
-      Serial.print("[CustomMode] ✅ FETCH COMPLETE - Total time: ");
+      Serial.print("[ScriptMode] ✅ FETCH COMPLETE - Total time: ");
       Serial.print(finalTotalTime);
       Serial.println("ms");
-      Serial.print("[CustomMode] 📊 Breakdown:");
+      Serial.print("[ScriptMode] 📊 Breakdown:");
       Serial.print(" Request=");
       Serial.print(requestTime);
       Serial.print("ms, Payload=");
@@ -534,19 +530,19 @@ bool requestBufferByIndex(int bufferIndex) {
       return formatNextFrameCount > 0;
     } else {
       Serial.println("====================================");
-      Serial.print("[CustomMode] ❌ ERROR: JSON parsing failed: ");
+      Serial.print("[ScriptMode] ❌ ERROR: JSON parsing failed: ");
       Serial.println(error.c_str());
-      Serial.print("[CustomMode] Payload size: ");
+      Serial.print("[ScriptMode] Payload size: ");
       Serial.print(payload.length());
       Serial.println(" bytes");
-      Serial.print("[CustomMode] Payload preview (first 200 chars): ");
+      Serial.print("[ScriptMode] Payload preview (first 200 chars): ");
       Serial.println(payload.substring(0, 200));
       Serial.println("====================================\n");
     }
   } else if (httpCode > 0) {
     // Got a non-200 HTTP response - parse the error message
     Serial.println("====================================");
-    Serial.print("[CustomMode] ❌ ERROR: HTTP ");
+    Serial.print("[ScriptMode] ❌ ERROR: HTTP ");
     Serial.print(httpCode);
     Serial.print(" - ");
     Serial.println(persistentBufferHttp.errorToString(httpCode));
@@ -555,7 +551,7 @@ bool requestBufferByIndex(int bufferIndex) {
     String errorPayload = persistentBufferHttp.getString();
     unsigned long errorReadTime = millis() - errorReadStart;
 
-    Serial.print("[CustomMode] Error response (");
+    Serial.print("[ScriptMode] Error response (");
     Serial.print(errorPayload.length());
     Serial.print(" bytes, read in ");
     Serial.print(errorReadTime);
@@ -567,46 +563,38 @@ bool requestBufferByIndex(int bufferIndex) {
     DeserializationError error = deserializeJson(errorDoc, errorPayload);
     if (!error) {
       if (errorDoc.containsKey("error")) {
-        Serial.print("[CustomMode] ❌ API Error: ");
+        Serial.print("[ScriptMode] ❌ API Error: ");
         Serial.println(errorDoc["error"].as<String>());
       }
       if (errorDoc.containsKey("message")) {
-        Serial.print("[CustomMode] 💡 Details: ");
+        Serial.print("[ScriptMode] 💡 Details: ");
         Serial.println(errorDoc["message"].as<String>());
       }
       if (errorDoc.containsKey("currentMode")) {
-        Serial.print("[CustomMode] Current mode: ");
+        Serial.print("[ScriptMode] Current mode: ");
         Serial.println(errorDoc["currentMode"].as<String>());
-      }
-      if (errorDoc.containsKey("totalBuffers")) {
-        Serial.print("[CustomMode] Total buffers: ");
-        Serial.println(errorDoc["totalBuffers"].as<int>());
-      }
-      if (errorDoc.containsKey("validRange")) {
-        Serial.print("[CustomMode] Valid range: ");
-        Serial.println(errorDoc["validRange"].as<String>());
       }
     }
 
     unsigned long errorTotalTime = millis() - fetchStartTime;
-    Serial.print("[CustomMode] ⏱️  Total error handling time: ");
+    Serial.print("[ScriptMode] ⏱️  Total error handling time: ");
     Serial.print(errorTotalTime);
     Serial.println("ms");
     Serial.println("====================================\n");
   } else {
     // Network error (no response)
     Serial.println("====================================");
-    Serial.print("[CustomMode] ❌ ERROR: Network error. Code: ");
+    Serial.print("[ScriptMode] ❌ ERROR: Network error. Code: ");
     Serial.print(httpCode);
     Serial.print(", Error: ");
     Serial.println(persistentBufferHttp.errorToString(httpCode));
 
     unsigned long errorTotalTime = millis() - fetchStartTime;
-    Serial.print("[CustomMode] ⏱️  Time until error: ");
+    Serial.print("[ScriptMode] ⏱️  Time until error: ");
     Serial.print(errorTotalTime);
     Serial.println("ms");
 
-    Serial.println("[CustomMode] 🔄 Resetting connection for fresh reconnect");
+    Serial.println("[ScriptMode] 🔄 Resetting connection for fresh reconnect");
     // On error, end connection to allow fresh reconnect
     persistentBufferHttp.end();
     persistentBufferClientInitialized = false;
@@ -623,30 +611,28 @@ bool requestBufferByIndex(int bufferIndex) {
   return false;
 }
 
-// Setup custom mode
-void setupCustomMode(int totalBuffersCount, int framerate) {
+// Setup script mode (server controls buffer sequencing)
+void setupScriptMode(int framerate) {
   bool needsSetup = false;
 
   // Take mutex to protect shared state
   if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
-    bool modeChanged = (currentMode != "custom");
-    needsSetup = modeChanged || !formatBufferLoaded || totalBuffers != totalBuffersCount;
+    bool modeChanged = (currentMode != "script");
+    needsSetup = modeChanged || !formatBufferLoaded;
 
     if (!needsSetup) {
-      Serial.println("[CustomMode] Already set up, skipping");
+      Serial.println("[ScriptMode] Already set up, skipping");
       xSemaphoreGive(stateMutex);
       return;
     }
 
-    Serial.println("[CustomMode] Setting up custom mode...");
-    Serial.print("[CustomMode] Total buffers: ");
-    Serial.print(totalBuffersCount);
-    Serial.print(", Framerate: ");
+    Serial.println("[ScriptMode] Setting up script mode...");
+    Serial.print("[ScriptMode] Framerate: ");
     Serial.println(framerate);
 
-    currentMode = "custom";
-    totalBuffers = totalBuffersCount;
+    currentMode = "script";
     currentBufferIndex = 0;
+    nextBufferIndex = 1;  // Server will tell us the actual next index
     bufferToFetch = -1;
     bufferFetchPending = false;
     formatFramerate = framerate;
@@ -655,7 +641,7 @@ void setupCustomMode(int totalBuffersCount, int framerate) {
   }
 
   // Request buffer 0 to start playing
-  Serial.println("[CustomMode] Requesting initial buffer (index 0)...");
+  Serial.println("[ScriptMode] Requesting initial buffer (index 0)...");
   if (requestBufferByIndex(0)) {
     // Copy next buffer to current buffer since requestBufferByIndex loads into formatNextFrames
     if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
@@ -668,7 +654,7 @@ void setupCustomMode(int totalBuffersCount, int framerate) {
         currentFormatFrameIndex = 0;
         lastFormatFrameUpdate = millis();
 
-        Serial.print("[CustomMode] Initial buffer loaded: ");
+        Serial.print("[ScriptMode] Initial buffer loaded: ");
         Serial.print(formatFrameCount);
         Serial.println(" frames");
 
@@ -680,17 +666,17 @@ void setupCustomMode(int totalBuffersCount, int framerate) {
       }
     }
   } else {
-    Serial.println("[CustomMode] WARNING: Failed to load initial buffer!");
+    Serial.println("[ScriptMode] WARNING: Failed to load initial buffer!");
   }
 }
 
-// Loop custom mode (called every loop iteration)
-void loopCustomMode() {
+// Loop script mode (called every loop iteration - server controls buffer sequencing)
+void loopScriptMode() {
   // Take mutex briefly to read/update state
   if (xSemaphoreTake(stateMutex, MUTEX_TIMEOUT_MS / portTICK_PERIOD_MS) == pdTRUE) {
     if (!formatBufferLoaded || formatFrameCount == 0) {
       if (!formatBufferLoaded) {
-        Serial.println("[CustomMode] No buffer loaded, waiting...");
+        Serial.println("[ScriptMode] No buffer loaded, waiting...");
       }
       xSemaphoreGive(stateMutex);
       return;
@@ -698,17 +684,13 @@ void loopCustomMode() {
 
     // Request next buffer fetch from background task (non-blocking)
     // Trigger immediately after buffer starts (frame 0+) to give maximum time for HTTP
-    if (totalBuffers > 1 && !formatNextBufferLoaded && !bufferFetchPending) {
-      int nextBufferIndex = (currentBufferIndex + 1) % totalBuffers;
-      // Modulo guarantees nextBufferIndex is always in valid range [0, totalBuffers)
-
+    // Server controls which buffer comes next via next_buffer_index
+    if (!formatNextBufferLoaded && !bufferFetchPending) {
       bufferToFetch = nextBufferIndex;
       bufferFetchPending = true;
 
-      Serial.print("[CustomMode] Requesting background fetch of buffer index ");
+      Serial.print("[ScriptMode] Requesting background fetch of buffer index ");
       Serial.print(nextBufferIndex);
-      Serial.print("/");
-      Serial.print(totalBuffers);
       Serial.print(" (current buffer: ");
       Serial.print(currentBufferIndex);
       Serial.print(", frame: ");
@@ -720,14 +702,14 @@ void loopCustomMode() {
     unsigned long timeSinceLastUpdate = currentTime - lastFormatFrameUpdate;
 
     if (timeSinceLastUpdate >= formatFrameDelay) {
-      Serial.print("[CustomMode] Displaying frame ");
+      Serial.print("[ScriptMode] Displaying frame ");
       Serial.print(currentFormatFrameIndex);
       Serial.print(" of ");
       Serial.print(formatFrameCount);
       Serial.print(" (buffer ");
       Serial.print(currentBufferIndex);
-      Serial.print(" of ");
-      Serial.print(totalBuffers);
+      Serial.print(", next: ");
+      Serial.print(nextBufferIndex);
       Serial.print(", delay: ");
       Serial.print(timeSinceLastUpdate);
       Serial.print("ms, target: ");
@@ -751,14 +733,14 @@ void loopCustomMode() {
 
       // If buffer complete, switch immediately (still holding mutex released)
       if (bufferComplete) {
-        Serial.println("[CustomMode] Buffer complete!");
+        Serial.println("[ScriptMode] Buffer complete!");
 
         unsigned long switchTime = millis();  // Capture time for consistent timing
 
         if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
           // Buffer complete, switch to next buffer immediately
           if (formatNextBufferLoaded) {
-            Serial.print("[CustomMode] Switching to next buffer (");
+            Serial.print("[ScriptMode] Switching to next buffer (");
             Serial.print(formatNextFrameCount);
             Serial.println(" frames)");
 
@@ -770,13 +752,13 @@ void loopCustomMode() {
             formatNextBufferLoaded = false;
             bufferFetchPending = false;  // Ready for next fetch request
 
-            // Manually modulo buffer index
-            currentBufferIndex = (currentBufferIndex + 1) % totalBuffers;
+            // Update current buffer index (server told us what's next)
+            currentBufferIndex = nextBufferIndex;
 
-            Serial.print("[CustomMode] Now playing buffer index ");
+            Serial.print("[ScriptMode] Now playing buffer index ");
             Serial.println(currentBufferIndex);
           } else {
-            Serial.println("[CustomMode] No next buffer available, waiting for fetch to complete...");
+            Serial.println("[ScriptMode] No next buffer available, waiting for fetch to complete...");
             // Don't increment buffer index - we need to wait for the fetch to complete
             // currentBufferIndex stays the same so we'll loop the current buffer
             // DON'T clear bufferFetchPending - the background task is still fetching!
@@ -908,15 +890,9 @@ void checkLedState() {
         unsigned long newDelay = doc["delay"] | 1000;
         setupLoopMode(colors, newDelay);
       }
-      else if (newMode == "custom") {
-        int totalBuffersCount = doc["totalBuffers"] | 0;
+      else if (newMode == "script") {
         int newFramerate = doc["framerate"] | 60;
-
-        if (totalBuffersCount > 0) {
-          setupCustomMode(totalBuffersCount, newFramerate);
-        } else {
-          Serial.println("[API] Custom mode - No buffers available");
-        }
+        setupScriptMode(newFramerate);
       } else {
         Serial.print("[API] WARNING: Unknown mode received: ");
         Serial.println(newMode);
@@ -1052,8 +1028,8 @@ void loop() {
     loopSimpleMode();
   } else if (modeToUse == "loop") {
     loopLoopMode();
-  } else if (modeToUse == "custom") {
-    loopCustomMode();
+  } else if (modeToUse == "script") {
+    loopScriptMode();
   }
 
   // Small delay to prevent watchdog issues
