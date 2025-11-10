@@ -29,6 +29,14 @@ unsigned long loopDelay = 1000;
 unsigned long lastLoopUpdate = 0;
 int currentLoopIndex = 0;
 
+// Format mode state
+String formatFrames[1000];  // Max 1000 frames
+int formatFrameCount = 0;
+int formatFramerate = 60;
+unsigned long formatFrameDelay = 0;  // Calculated from framerate
+unsigned long lastFormatFrameUpdate = 0;
+int currentFormatFrameIndex = 0;
+
 // API check timing
 unsigned long lastCheckTime = 0;
 const unsigned long checkInterval = 1000; // Check every second (1000ms)
@@ -46,6 +54,28 @@ CRGB hexToCRGB(String hex) {
   int b = number & 0xFF;
 
   return CRGB(r, g, b);
+}
+
+// Parse a frame string (comma-separated hex colors) and display it
+void parseAndDisplayFrame(String frame) {
+  // Split by comma
+  int startIndex = 0;
+  int ledIndex = 0;
+
+  for (int i = 0; i <= frame.length() && ledIndex < NUM_LEDS; i++) {
+    if (i == frame.length() || frame.charAt(i) == ',') {
+      if (i > startIndex) {
+        String colorStr = frame.substring(startIndex, i);
+        colorStr.trim();
+        CRGB color = hexToCRGB(colorStr);
+        leds[ledIndex] = color;
+        ledIndex++;
+      }
+      startIndex = i + 1;
+    }
+  }
+
+  FastLED.show();
 }
 
 void setup() {
@@ -109,6 +139,20 @@ void loop() {
     }
   }
 
+  // Handle format mode animation
+  if (currentMode == "format" && formatFrameCount > 0) {
+    unsigned long currentTime = millis();
+    if (currentTime - lastFormatFrameUpdate >= formatFrameDelay) {
+      lastFormatFrameUpdate = currentTime;
+
+      // Parse and display current frame
+      String frame = formatFrames[currentFormatFrameIndex];
+      parseAndDisplayFrame(frame);
+
+      currentFormatFrameIndex = (currentFormatFrameIndex + 1) % formatFrameCount;
+    }
+  }
+
   // Check API every second
   unsigned long currentTime = millis();
   if (currentTime - lastCheckTime >= checkInterval) {
@@ -138,8 +182,8 @@ void checkLedState() {
       String payload = http.getString();
       Serial.println("Response: " + payload);
 
-      // Parse JSON response
-      DynamicJsonDocument doc(2048);
+      // Parse JSON response (larger buffer for format mode with many frames)
+      DynamicJsonDocument doc(32768);  // 32KB buffer
       DeserializationError error = deserializeJson(doc, payload);
 
       if (!error) {
@@ -217,6 +261,57 @@ void checkLedState() {
               Serial.print(" colors, delay: ");
               Serial.print(loopDelay);
               Serial.println("ms");
+            }
+          }
+        }
+
+        if (modeChanged || newMode == "format") {
+          // Handle format mode
+          if (newMode == "format") {
+            JsonArray frames = doc["frames"];
+            int newFramerate = doc["framerate"] | 60;
+
+            bool formatChanged = false;
+
+            // Check if frames changed
+            if (frames.size() != formatFrameCount) {
+              formatChanged = true;
+            } else {
+              for (int i = 0; i < frames.size() && i < 1000; i++) {
+                String frame = frames[i] | "";
+                if (frame != formatFrames[i]) {
+                  formatChanged = true;
+                  break;
+                }
+              }
+            }
+
+            if (modeChanged || formatChanged || newFramerate != formatFramerate) {
+              currentMode = "format";
+              formatFramerate = newFramerate;
+              // Convert fps to milliseconds per frame (round to nearest)
+              formatFrameDelay = (1000 + formatFramerate / 2) / formatFramerate;
+              formatFrameCount = min((int)frames.size(), 1000);
+
+              // Store frames
+              for (int i = 0; i < formatFrameCount; i++) {
+                formatFrames[i] = frames[i] | "";
+              }
+
+              // Reset frame index when mode changes or frames change
+              if (modeChanged || formatChanged) {
+                currentFormatFrameIndex = 0;
+                lastFormatFrameUpdate = millis();
+                if (formatFrameCount > 0) {
+                  parseAndDisplayFrame(formatFrames[0]);
+                }
+              }
+
+              Serial.print("Format mode - ");
+              Serial.print(formatFrameCount);
+              Serial.print(" frames, ");
+              Serial.print(formatFramerate);
+              Serial.println(" fps");
             }
           }
         }
