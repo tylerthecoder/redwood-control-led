@@ -9,7 +9,7 @@ const char* ssid = "FBI Van";
 const char* password = "Tyler123";
 
 // Server configuration
-const char* serverHost = "https://control-led.tylertracy.com/";
+const char* serverHost = "https://control-led.tylertracy.com";
 const char* apiPath = "/api/control";
 const char* completePath = "/api/control/complete";
 

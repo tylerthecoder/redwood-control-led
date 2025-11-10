@@ -20,33 +20,23 @@ interface CustomMode {
 
 export type LedState = SimpleMode | LoopMode | CustomMode;
 
-// Use a mutable object that can be reassigned
-const state: { value: LedState } = {
-    value: {
-        mode: "simple",
-        on: false,
-        color: "#0000FF",
-    },
+// Direct state variable
+let ledState: LedState = {
+    mode: "simple",
+    on: false,
+    color: "#0000FF",
 };
-
-
-export const ledState = new Proxy(state, {
-    get(target, prop) {
-        if (prop === "value") return target.value;
-        return target.value[prop as keyof LedState];
-    },
-    set(target, prop, value) {
-        if (prop === "value") {
-            target.value = value;
-            return true;
-        }
-        (target.value as unknown as Record<string, unknown>)[prop as string] = value;
-        return true;
-    },
-}) as LedState & { value: LedState };
 
 // Helper to update state
 export function updateState(newState: LedState) {
-    state.value = newState;
+    ledState = newState;
 }
+
+// Export getter function to access state
+export function getLedState(): LedState {
+    return ledState;
+}
+
+// Export the state directly (for backward compatibility)
+export { ledState };
 

@@ -117,7 +117,10 @@ export async function POST(request: Request) {
             } else {
                 // Just update framerate or other properties
                 if (ledState.mode === "custom") {
-                    ledState.framerate = body.framerate !== undefined ? body.framerate : ledState.framerate;
+                    updateState({
+                        ...ledState,
+                        framerate: body.framerate !== undefined ? body.framerate : ledState.framerate,
+                    });
                 } else {
                     updateState({
                         mode: "custom",
@@ -129,10 +132,16 @@ export async function POST(request: Request) {
             }
         } else if (ledState.mode === "simple" && body.on !== undefined) {
             // Just toggle on/off for simple mode
-            ledState.on = body.on;
+            updateState({
+                ...ledState,
+                on: body.on,
+            });
         } else if (ledState.mode === "simple" && body.color !== undefined) {
             // Just update color for simple mode
-            ledState.color = body.color;
+            updateState({
+                ...ledState,
+                color: body.color,
+            });
         }
 
         return Response.json({

@@ -1,5 +1,5 @@
 // Buffer completion endpoint
-import { ledState } from "../state";
+import { ledState, updateState } from "../state";
 
 export async function POST(request: Request) {
     try {
@@ -8,11 +8,15 @@ export async function POST(request: Request) {
         if (body.action === "completeBuffer" && ledState.mode === "custom") {
             const customState = ledState;
             // Move to next buffer
-            customState.currentBufferIndex = (customState.currentBufferIndex + 1) % customState.buffers.length;
+            const newBufferIndex = (customState.currentBufferIndex + 1) % customState.buffers.length;
+            updateState({
+                ...customState,
+                currentBufferIndex: newBufferIndex,
+            });
 
             return Response.json({
                 success: true,
-                currentBufferIndex: customState.currentBufferIndex,
+                currentBufferIndex: newBufferIndex,
             });
         }
 
