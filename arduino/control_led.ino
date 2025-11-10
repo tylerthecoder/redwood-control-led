@@ -230,9 +230,9 @@ void loopLoopMode() {
 // ============================================================================
 
 // Custom mode state
-// 1 second buffers at 60fps = 60 frames * 60 LEDs = 3600 numbers per buffer
-unsigned long formatFrames[3600];  // Current buffer: 60 frames * 60 LEDs = 3600 numbers
-unsigned long formatNextFrames[3600];  // Next buffer (loaded in background)
+// 0.5 second buffers at 60fps = 30 frames * 60 LEDs = 1800 numbers per buffer
+unsigned long formatFrames[1800];  // Current buffer: 30 frames * 60 LEDs = 1800 numbers
+unsigned long formatNextFrames[1800];  // Next buffer (loaded in background)
 int formatFrameCount = 0;
 int formatNextFrameCount = 0;
 int formatFramerate = 60;
@@ -306,7 +306,7 @@ bool requestBufferByIndex(int bufferIndex) {
 
   if (httpCode > 0 && httpCode == HTTP_CODE_OK) {
     String payload = http.getString();
-    DynamicJsonDocument doc(32768);
+    DynamicJsonDocument doc(40960);  // 40KB to handle buffer JSON with overhead
     DeserializationError error = deserializeJson(doc, payload);
 
     if (!error) {
@@ -560,7 +560,7 @@ void checkLedState() {
     Serial.print("[API] Response preview (first 200 chars): ");
     Serial.println(payload.substring(0, 200));
 
-    DynamicJsonDocument doc(32768);
+    DynamicJsonDocument doc(40960);  // 40KB to handle buffer JSON with overhead
     DeserializationError error = deserializeJson(doc, payload);
 
     if (!error) {
