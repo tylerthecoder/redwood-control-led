@@ -7,7 +7,7 @@
 #include <freertos/task.h>
 #include <freertos/semphr.h>
 
-// WiFi credentials
+// WiFi credentials (filled by build script)
 const char* ssid = "FBI Van";
 const char* password = "Tyler123";
 
@@ -362,37 +362,6 @@ bool requestBufferByIndex(int bufferIndex) {
   Serial.print(" at ");
   Serial.print(fetchStartTime);
   Serial.println("ms");
-
-  // Validate buffer index before making request
-  unsigned long validationStart = millis();
-  int currentTotalBuffers = 0;
-  if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
-    currentTotalBuffers = totalBuffers;
-    xSemaphoreGive(stateMutex);
-  }
-  unsigned long validationTime = millis() - validationStart;
-
-  if (bufferIndex < 0 || bufferIndex >= currentTotalBuffers) {
-    Serial.print("[ScriptMode] ERROR: Buffer index ");
-    Serial.print(bufferIndex);
-    Serial.print(" out of range (0-");
-    Serial.print(currentTotalBuffers - 1);
-    Serial.println("). Skipping request.");
-
-    if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
-      bufferFetchPending = false;
-      xSemaphoreGive(stateMutex);
-    }
-    return false;
-  }
-
-  Serial.print("[ScriptMode] ✓ Validation: ");
-  Serial.print(validationTime);
-  Serial.print("ms (buffer ");
-  Serial.print(bufferIndex);
-  Serial.print("/");
-  Serial.print(currentTotalBuffers);
-  Serial.println(")");
 
   // Initialize persistent client on first use
   unsigned long initStart = millis();
