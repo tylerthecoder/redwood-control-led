@@ -422,6 +422,27 @@ bool requestBufferByIndex(int bufferIndex) {
     Serial.print(payloadTime);
     Serial.println("ms");
 
+    // Check for empty payload
+    if (payload.length() == 0) {
+      Serial.println("====================================");
+      Serial.println("[ScriptMode] ❌ ERROR: Empty payload received (connection may be stale)");
+      Serial.println("[ScriptMode] 🔄 Resetting connection for fresh reconnect");
+      persistentBufferHttp.end();
+      persistentBufferClientInitialized = false;
+
+      if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
+        bufferFetchPending = false;
+        xSemaphoreGive(stateMutex);
+      }
+
+      unsigned long errorTotalTime = millis() - fetchStartTime;
+      Serial.print("[ScriptMode] ⏱️  Total time until error: ");
+      Serial.print(errorTotalTime);
+      Serial.println("ms");
+      Serial.println("====================================\n");
+      return false;
+    }
+
     // Parse JSON
     Serial.println("[ScriptMode] 🔍 Parsing JSON...");
     unsigned long parseStart = millis();
