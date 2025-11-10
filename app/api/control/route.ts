@@ -157,21 +157,43 @@ export async function POST(request: Request) {
     }
 }
 
-export async function GET() {
+export async function GET(request: Request) {
+    const { searchParams } = new URL(request.url);
+    const bufferIndexParam = searchParams.get("bufferIndex");
+
     // Return current LED state with mode
-    // For custom mode, return current buffer and next buffer
+    // For custom mode, return specific buffer if bufferIndex is provided
     if (ledState.mode === "custom") {
         const customState = ledState;
-        const currentBuffer = customState.buffers[customState.currentBufferIndex] || [];
-        const nextBufferIndex = (customState.currentBufferIndex + 1) % customState.buffers.length;
-        const nextBuffer = customState.buffers[nextBufferIndex] || [];
+        const totalBuffers = customState.buffers.length;
 
+        if (bufferIndexParam !== null) {
+            // Return specific buffer requested by Arduino
+            const requestedIndex = parseInt(bufferIndexParam, 10);
+            if (!isNaN(requestedIndex) && requestedIndex >= 0 && requestedIndex < totalBuffers) {
+                const requestedBuffer = customState.buffers[requestedIndex] || [];
+                return Response.json({
+                    mode: "custom",
+                    buffer: requestedBuffer,
+                    bufferIndex: requestedIndex,
+                    totalBuffers: totalBuffers,
+                    framerate: customState.framerate,
+                });
+            } else {
+                return Response.json(
+                    { error: `Invalid bufferIndex: ${bufferIndexParam}. Must be between 0 and ${totalBuffers - 1}` },
+                    { status: 400 }
+                );
+            }
+        }
+
+        // No bufferIndex specified, return current buffer info
+        const currentBuffer = customState.buffers[customState.currentBufferIndex] || [];
         return Response.json({
             ...customState,
             currentBuffer,
-            nextBuffer,
             currentBufferIndex: customState.currentBufferIndex,
-            totalBuffers: customState.buffers.length,
+            totalBuffers: totalBuffers,
         });
     }
 

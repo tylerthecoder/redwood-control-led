@@ -3,6 +3,9 @@
 #include <WiFiClientSecure.h>
 #include <ArduinoJson.h>
 #include <FastLED.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+#include <freertos/semphr.h>
 
 // WiFi credentials
 const char* ssid = "FBI Van";
@@ -23,8 +26,10 @@ CRGB leds[NUM_LEDS];
 // Global mode state
 String currentMode = "simple";
 
-// API check timing
-unsigned long lastCheckTime = 0;
+// Mutex for protecting shared state between main loop and API task
+SemaphoreHandle_t stateMutex = NULL;
+
+// API check timing (for background task)
 const unsigned long checkInterval = 1000;
 
 // ============================================================================
@@ -62,21 +67,26 @@ String simpleColor = "#0000FF";
 
 // Setup simple mode
 void setupSimpleMode(bool on, String color) {
-  // Check if state actually changed
-  if (simpleOn == on && simpleColor == color && currentMode == "simple") {
-    Serial.println("[SimpleMode] No changes detected, skipping setup");
-    return;
+  // Take mutex to protect shared state
+  if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
+    // Check if state actually changed
+    if (simpleOn == on && simpleColor == color && currentMode == "simple") {
+      Serial.println("[SimpleMode] No changes detected, skipping setup");
+      xSemaphoreGive(stateMutex);
+      return;
+    }
+
+    Serial.println("[SimpleMode] Setting up simple mode...");
+    Serial.print("[SimpleMode] ON: ");
+    Serial.print(on ? "true" : "false");
+    Serial.print(", Color: ");
+    Serial.println(color);
+
+    simpleOn = on;
+    simpleColor = color;
+    currentMode = "simple";
+    xSemaphoreGive(stateMutex);
   }
-
-  Serial.println("[SimpleMode] Setting up simple mode...");
-  Serial.print("[SimpleMode] ON: ");
-  Serial.print(on ? "true" : "false");
-  Serial.print(", Color: ");
-  Serial.println(color);
-
-  simpleOn = on;
-  simpleColor = color;
-  currentMode = "simple";
 
   // Update LEDs immediately
   if (on) {
@@ -114,48 +124,68 @@ int currentLoopIndex = 0;
 
 // Setup loop mode
 void setupLoopMode(JsonArray colors, unsigned long delay) {
-  // Check if state actually changed
-  bool colorsChanged = (colors.size() != loopColorCount);
-  if (!colorsChanged) {
-    for (int i = 0; i < colors.size() && i < 20; i++) {
-      String color = colors[i] | "#FFFFFF";
-      if (color != loopColors[i]) {
-        colorsChanged = true;
-        break;
+  bool colorsChanged = false;
+  bool modeChanged = false;
+
+  // Take mutex to protect shared state
+  if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
+    // Check if state actually changed
+    colorsChanged = (colors.size() != loopColorCount);
+    if (!colorsChanged) {
+      for (int i = 0; i < colors.size() && i < 20; i++) {
+        String color = colors[i] | "#FFFFFF";
+        if (color != loopColors[i]) {
+          colorsChanged = true;
+          break;
+        }
       }
     }
+
+    bool delayChanged = (delay != loopDelay);
+    modeChanged = (currentMode != "loop");
+
+    if (!modeChanged && !colorsChanged && !delayChanged) {
+      Serial.println("[LoopMode] No changes detected, skipping setup");
+      xSemaphoreGive(stateMutex);
+      return;
+    }
+
+    Serial.println("[LoopMode] Setting up loop mode...");
+    Serial.print("[LoopMode] Colors count: ");
+    Serial.print(colors.size());
+    Serial.print(", Delay: ");
+    Serial.println(delay);
+
+    loopDelay = delay;
+    loopColorCount = min((int)colors.size(), 20);
+
+    for (int i = 0; i < loopColorCount; i++) {
+      loopColors[i] = colors[i] | "#FFFFFF";
+    }
+
+    currentMode = "loop";
+
+    // Reset to first color if colors changed or mode changed
+    if (modeChanged || colorsChanged) {
+      currentLoopIndex = 0;
+      lastLoopUpdate = millis();
+    }
+
+    xSemaphoreGive(stateMutex);
   }
 
-  bool delayChanged = (delay != loopDelay);
-  bool modeChanged = (currentMode != "loop");
-
-  if (!modeChanged && !colorsChanged && !delayChanged) {
-    Serial.println("[LoopMode] No changes detected, skipping setup");
-    return;
-  }
-
-  Serial.println("[LoopMode] Setting up loop mode...");
-  Serial.print("[LoopMode] Colors count: ");
-  Serial.print(colors.size());
-  Serial.print(", Delay: ");
-  Serial.println(delay);
-
-  loopDelay = delay;
-  loopColorCount = min((int)colors.size(), 20);
-
-  for (int i = 0; i < loopColorCount; i++) {
-    loopColors[i] = colors[i] | "#FFFFFF";
-  }
-
-  currentMode = "loop";
-
-  // Reset to first color if colors changed or mode changed
+  // Display first color immediately if mode/colors changed (outside mutex)
   if (modeChanged || colorsChanged) {
-    currentLoopIndex = 0;
-    lastLoopUpdate = millis();
+    // Take mutex briefly to read first color
+    String firstColor = "#FFFFFF";
+    if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
+      if (loopColorCount > 0) {
+        firstColor = loopColors[0];
+      }
+      xSemaphoreGive(stateMutex);
+    }
 
-    // Display first color immediately
-    CRGB color = hexToCRGB(loopColors[0]);
+    CRGB color = hexToCRGB(firstColor);
     fill_solid(leds, NUM_LEDS, color);
     FastLED.show();
   }
@@ -169,21 +199,29 @@ void setupLoopMode(JsonArray colors, unsigned long delay) {
 
 // Loop loop mode (called every loop iteration)
 void loopLoopMode() {
-  unsigned long currentTime = millis();
-  if (currentTime - lastLoopUpdate >= loopDelay) {
-    Serial.print("[LoopMode] Updating to color index ");
-    Serial.print(currentLoopIndex);
-    Serial.print(" of ");
-    Serial.print(loopColorCount);
-    Serial.print(" (color: ");
-    Serial.print(loopColors[currentLoopIndex]);
-    Serial.println(")");
+  // Take mutex briefly to read state
+  if (xSemaphoreTake(stateMutex, 10 / portTICK_PERIOD_MS) == pdTRUE) {
+    unsigned long currentTime = millis();
+    if (currentTime - lastLoopUpdate >= loopDelay) {
+      Serial.print("[LoopMode] Updating to color index ");
+      Serial.print(currentLoopIndex);
+      Serial.print(" of ");
+      Serial.print(loopColorCount);
+      Serial.print(" (color: ");
+      Serial.print(loopColors[currentLoopIndex]);
+      Serial.println(")");
 
-    lastLoopUpdate = currentTime;
-    CRGB color = hexToCRGB(loopColors[currentLoopIndex]);
-    fill_solid(leds, NUM_LEDS, color);
-    FastLED.show();
-    currentLoopIndex = (currentLoopIndex + 1) % loopColorCount;
+      lastLoopUpdate = currentTime;
+      CRGB color = hexToCRGB(loopColors[currentLoopIndex]);
+      currentLoopIndex = (currentLoopIndex + 1) % loopColorCount;
+      xSemaphoreGive(stateMutex);
+
+      // Update LEDs outside of mutex (FastLED operations can be slow)
+      fill_solid(leds, NUM_LEDS, color);
+      FastLED.show();
+    } else {
+      xSemaphoreGive(stateMutex);
+    }
   }
 }
 
@@ -200,9 +238,12 @@ int formatNextFrameCount = 0;
 int formatFramerate = 60;
 unsigned long formatFrameDelay = 0;
 unsigned long lastFormatFrameUpdate = 0;
-int currentFormatFrameIndex = 0;
+int currentFormatFrameIndex = 0;  // Frame index within current buffer
+int currentBufferIndex = 0;       // Which buffer we're currently playing
+int totalBuffers = 0;              // Total number of buffers in sequence
 bool formatBufferLoaded = false;
 bool formatNextBufferLoaded = false;
+bool formatNextBufferRequested = false;  // Track if we've requested the next buffer
 
 // Load format buffer from JSON array
 void loadFormatBuffer(JsonArray bufferArray, unsigned long* targetBuffer, int& frameCount) {
@@ -243,86 +284,122 @@ void displayFormatFrame(int frameIndex) {
   FastLED.show();
 }
 
-// Notify server that buffer is complete
-void notifyBufferComplete() {
-  Serial.println("[CustomMode] Notifying server of buffer completion...");
+// Request a specific buffer by index from the API
+bool requestBufferByIndex(int bufferIndex) {
+  Serial.print("[CustomMode] Requesting buffer index ");
+  Serial.println(bufferIndex);
 
   WiFiClientSecure client;
   HTTPClient http;
 
   client.setInsecure();
 
-  String url = String(serverHost) + completePath;
-  Serial.print("[CustomMode] POST URL: ");
+  String url = String(serverHost) + apiPath + "?bufferIndex=" + String(bufferIndex);
+  Serial.print("[CustomMode] GET URL: ");
   Serial.println(url);
 
   http.begin(client, url);
-  http.addHeader("Content-Type", "application/json");
+  int httpCode = http.GET();
 
-  String json = "{\"action\":\"completeBuffer\"}";
-  Serial.print("[CustomMode] Sending JSON: ");
-  Serial.println(json);
+  Serial.print("[CustomMode] HTTP Response code: ");
+  Serial.println(httpCode);
 
-  int httpCode = http.POST(json);
+  if (httpCode > 0 && httpCode == HTTP_CODE_OK) {
+    String payload = http.getString();
+    DynamicJsonDocument doc(32768);
+    DeserializationError error = deserializeJson(doc, payload);
 
-  if (httpCode > 0) {
-    Serial.print("[CustomMode] Buffer complete notification sent successfully. HTTP code: ");
-    Serial.println(httpCode);
+    if (!error) {
+      JsonArray buffer = doc["buffer"];
+      int receivedIndex = doc["bufferIndex"] | -1;
+      int receivedTotal = doc["totalBuffers"] | 0;
 
-    if (httpCode == HTTP_CODE_OK) {
-      String response = http.getString();
-      Serial.print("[CustomMode] Server response: ");
-      Serial.println(response);
+      Serial.print("[CustomMode] Received buffer index ");
+      Serial.print(receivedIndex);
+      Serial.print(" of ");
+      Serial.println(receivedTotal);
+
+      // Update total buffers if we got new info
+      if (receivedTotal > 0 && totalBuffers == 0) {
+        totalBuffers = receivedTotal;
+      }
+
+      // Load the buffer into next buffer slot
+      loadFormatBuffer(buffer, formatNextFrames, formatNextFrameCount);
+
+      if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
+        formatNextBufferLoaded = (formatNextFrameCount > 0);
+        formatNextBufferRequested = false;
+        xSemaphoreGive(stateMutex);
+      }
+
+      http.end();
+      return formatNextFrameCount > 0;
+    } else {
+      Serial.print("[CustomMode] JSON parsing failed: ");
+      Serial.println(error.c_str());
     }
   } else {
-    Serial.print("[CustomMode] Failed to notify buffer complete. Error: ");
+    Serial.print("[CustomMode] HTTP GET failed. Code: ");
+    Serial.print(httpCode);
+    Serial.print(", Error: ");
     Serial.println(http.errorToString(httpCode));
   }
 
   http.end();
+
+  if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
+    formatNextBufferRequested = false;
+    xSemaphoreGive(stateMutex);
+  }
+
+  return false;
 }
 
 // Setup custom mode
-void setupCustomMode(JsonArray currentBuffer, JsonArray nextBuffer, int framerate) {
-  bool modeChanged = (currentMode != "custom");
-  bool needsSetup = modeChanged || !formatBufferLoaded;
+void setupCustomMode(JsonArray currentBuffer, int totalBuffersCount, int framerate) {
+  bool needsSetup = false;
 
-  if (!needsSetup) {
-    Serial.println("[CustomMode] Current buffer already loaded, skipping setup");
+  // Take mutex to protect shared state
+  if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
+    bool modeChanged = (currentMode != "custom");
+    needsSetup = modeChanged || !formatBufferLoaded;
 
-    // Still try to load next buffer in background if available
-    if (nextBuffer.size() > 0 && !formatNextBufferLoaded) {
-      Serial.println("[CustomMode] Loading next buffer in background...");
-      loadFormatBuffer(nextBuffer, formatNextFrames, formatNextFrameCount);
-      formatNextBufferLoaded = (formatNextFrameCount > 0);
-      if (formatNextBufferLoaded) {
-        Serial.print("[CustomMode] Next buffer loaded: ");
-        Serial.print(formatNextFrameCount);
-        Serial.println(" frames");
-      } else {
-        Serial.println("[CustomMode] WARNING: Next buffer failed to load!");
-      }
+    if (!needsSetup) {
+      Serial.println("[CustomMode] Current buffer already loaded, skipping setup");
+      xSemaphoreGive(stateMutex);
+      return;
     }
-    return;
+
+    Serial.println("[CustomMode] Setting up custom mode...");
+    Serial.print("[CustomMode] Current buffer size: ");
+    Serial.print(currentBuffer.size());
+    Serial.print(", Total buffers: ");
+    Serial.print(totalBuffersCount);
+    Serial.print(", Framerate: ");
+    Serial.println(framerate);
+
+    currentMode = "custom";
+    totalBuffers = totalBuffersCount;
+    currentBufferIndex = 0;
+    formatNextBufferRequested = false;
+    xSemaphoreGive(stateMutex);
   }
 
-  Serial.println("[CustomMode] Setting up custom mode...");
-  Serial.print("[CustomMode] Current buffer size: ");
-  Serial.print(currentBuffer.size());
-  Serial.print(", Next buffer size: ");
-  Serial.print(nextBuffer.size());
-  Serial.print(", Framerate: ");
-  Serial.println(framerate);
-
-  currentMode = "custom";
-
-  // Load current buffer
+  // Load current buffer (outside mutex for performance)
   loadFormatBuffer(currentBuffer, formatFrames, formatFrameCount);
-  formatBufferLoaded = (formatFrameCount > 0);
-  formatFramerate = framerate;
-  formatFrameDelay = (1000 + formatFramerate / 2) / formatFramerate;
-  currentFormatFrameIndex = 0;
-  lastFormatFrameUpdate = millis();
+
+  // Update state with mutex
+  if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
+    formatBufferLoaded = (formatFrameCount > 0);
+    formatFramerate = framerate;
+    formatFrameDelay = (1000 + formatFramerate / 2) / formatFramerate;
+    currentFormatFrameIndex = 0;
+    lastFormatFrameUpdate = millis();
+    formatNextBufferLoaded = false;
+    formatNextBufferRequested = false;
+    xSemaphoreGive(stateMutex);
+  }
 
   Serial.print("[CustomMode] Buffer loaded: ");
   Serial.print(formatFrameCount);
@@ -332,83 +409,106 @@ void setupCustomMode(JsonArray currentBuffer, JsonArray nextBuffer, int framerat
   Serial.print(formatFrameDelay);
   Serial.println(" ms");
 
-  if (formatBufferLoaded) {
+  if (formatFrameCount > 0) {
     Serial.println("[CustomMode] Displaying first frame");
     displayFormatFrame(0);
   } else {
     Serial.println("[CustomMode] WARNING: Buffer failed to load!");
   }
-
-  // Load next buffer in background if available
-  if (nextBuffer.size() > 0 && !formatNextBufferLoaded) {
-    Serial.println("[CustomMode] Loading next buffer in background...");
-    loadFormatBuffer(nextBuffer, formatNextFrames, formatNextFrameCount);
-    formatNextBufferLoaded = (formatNextFrameCount > 0);
-    if (formatNextBufferLoaded) {
-      Serial.print("[CustomMode] Next buffer loaded: ");
-      Serial.print(formatNextFrameCount);
-      Serial.println(" frames");
-    } else {
-      Serial.println("[CustomMode] WARNING: Next buffer failed to load!");
-    }
-  }
 }
 
 // Loop custom mode (called every loop iteration)
 void loopCustomMode() {
-  if (!formatBufferLoaded || formatFrameCount == 0) {
-    if (!formatBufferLoaded) {
-      Serial.println("[CustomMode] No buffer loaded, waiting...");
-    }
-    return;
-  }
-
-  unsigned long currentTime = millis();
-  unsigned long timeSinceLastUpdate = currentTime - lastFormatFrameUpdate;
-
-  if (timeSinceLastUpdate >= formatFrameDelay) {
-    Serial.print("[CustomMode] Displaying frame ");
-    Serial.print(currentFormatFrameIndex);
-    Serial.print(" of ");
-    Serial.print(formatFrameCount);
-    Serial.print(" (delay: ");
-    Serial.print(timeSinceLastUpdate);
-    Serial.print("ms, target: ");
-    Serial.print(formatFrameDelay);
-    Serial.println("ms)");
-
-    lastFormatFrameUpdate = currentTime;
-    displayFormatFrame(currentFormatFrameIndex);
-    currentFormatFrameIndex++;
-
-    // Check if buffer is complete
-    int framesPerBuffer = formatFrameCount;
-    if (currentFormatFrameIndex >= framesPerBuffer) {
-      Serial.println("[CustomMode] Buffer complete!");
-
-      // Buffer complete, switch to next buffer
-      if (formatNextBufferLoaded) {
-        Serial.print("[CustomMode] Switching to next buffer (");
-        Serial.print(formatNextFrameCount);
-        Serial.println(" frames)");
-
-        // Copy next buffer to current buffer
-        for (int i = 0; i < formatNextFrameCount * NUM_LEDS; i++) {
-          formatFrames[i] = formatNextFrames[i];
-        }
-
-        formatFrameCount = formatNextFrameCount;
-        formatNextFrameCount = 0;
-        formatBufferLoaded = true;
-        formatNextBufferLoaded = false;
-        currentFormatFrameIndex = 0;
-
-        Serial.println("[CustomMode] Buffer switched, notifying server...");
-        notifyBufferComplete();
-      } else {
-        Serial.println("[CustomMode] No next buffer available, looping current buffer");
-        currentFormatFrameIndex = 0;
+  // Take mutex briefly to read/update state
+  if (xSemaphoreTake(stateMutex, 10 / portTICK_PERIOD_MS) == pdTRUE) {
+    if (!formatBufferLoaded || formatFrameCount == 0) {
+      if (!formatBufferLoaded) {
+        Serial.println("[CustomMode] No buffer loaded, waiting...");
       }
+      xSemaphoreGive(stateMutex);
+      return;
+    }
+
+    // Prefetch next buffer if we don't have it and there are multiple buffers
+    if (totalBuffers > 1 && !formatNextBufferLoaded && !formatNextBufferRequested) {
+      int nextBufferIndex = (currentBufferIndex + 1) % totalBuffers;
+      formatNextBufferRequested = true;
+      xSemaphoreGive(stateMutex);
+
+      Serial.print("[CustomMode] Prefetching next buffer index ");
+      Serial.println(nextBufferIndex);
+      requestBufferByIndex(nextBufferIndex);
+
+      // Take mutex again to continue
+      xSemaphoreTake(stateMutex, portMAX_DELAY);
+    }
+
+    unsigned long currentTime = millis();
+    unsigned long timeSinceLastUpdate = currentTime - lastFormatFrameUpdate;
+
+    if (timeSinceLastUpdate >= formatFrameDelay) {
+      Serial.print("[CustomMode] Displaying frame ");
+      Serial.print(currentFormatFrameIndex);
+      Serial.print(" of ");
+      Serial.print(formatFrameCount);
+      Serial.print(" (buffer ");
+      Serial.print(currentBufferIndex);
+      Serial.print(" of ");
+      Serial.print(totalBuffers);
+      Serial.print(", delay: ");
+      Serial.print(timeSinceLastUpdate);
+      Serial.print("ms, target: ");
+      Serial.print(formatFrameDelay);
+      Serial.println("ms)");
+
+      lastFormatFrameUpdate = currentTime;
+      int frameToDisplay = currentFormatFrameIndex;
+      currentFormatFrameIndex++;
+
+      // Check if buffer is complete
+      int framesPerBuffer = formatFrameCount;
+      bool bufferComplete = (currentFormatFrameIndex >= framesPerBuffer);
+
+      if (bufferComplete) {
+        Serial.println("[CustomMode] Buffer complete!");
+
+        // Buffer complete, switch to next buffer immediately
+        if (formatNextBufferLoaded) {
+          Serial.print("[CustomMode] Switching to next buffer (");
+          Serial.print(formatNextFrameCount);
+          Serial.println(" frames)");
+
+          // Copy next buffer to current buffer
+          for (int i = 0; i < formatNextFrameCount * NUM_LEDS; i++) {
+            formatFrames[i] = formatNextFrames[i];
+          }
+
+          formatFrameCount = formatNextFrameCount;
+          formatNextFrameCount = 0;
+          formatBufferLoaded = true;
+          formatNextBufferLoaded = false;
+          formatNextBufferRequested = false;
+          currentFormatFrameIndex = 0;
+
+          // Manually modulo buffer index
+          currentBufferIndex = (currentBufferIndex + 1) % totalBuffers;
+
+          Serial.print("[CustomMode] Now playing buffer index ");
+          Serial.println(currentBufferIndex);
+        } else {
+          Serial.println("[CustomMode] No next buffer available, looping current buffer");
+          currentFormatFrameIndex = 0;
+          // Still increment buffer index for tracking
+          currentBufferIndex = (currentBufferIndex + 1) % totalBuffers;
+        }
+      }
+
+      xSemaphoreGive(stateMutex);
+
+      // Display frame outside of mutex (FastLED operations can be slow)
+      displayFormatFrame(frameToDisplay);
+    } else {
+      xSemaphoreGive(stateMutex);
     }
   }
 }
@@ -416,6 +516,23 @@ void loopCustomMode() {
 // ============================================================================
 // API FUNCTIONS
 // ============================================================================
+
+// Background task to check LED state from API
+void apiTask(void *parameter) {
+  Serial.println("[API Task] Background API task started");
+
+  while (true) {
+    // Wait for WiFi connection
+    if (WiFi.status() == WL_CONNECTED) {
+      checkLedState();
+    } else {
+      Serial.println("[API Task] WiFi not connected, skipping API check");
+    }
+
+    // Wait for check interval
+    vTaskDelay(checkInterval / portTICK_PERIOD_MS);
+  }
+}
 
 // Check and update LED state from API
 void checkLedState() {
@@ -465,9 +582,14 @@ void checkLedState() {
       }
       else if (newMode == "custom") {
         JsonArray currentBuffer = doc["currentBuffer"];
-        JsonArray nextBuffer = doc["nextBuffer"];
+        int totalBuffersCount = doc["totalBuffers"] | 0;
         int newFramerate = doc["framerate"] | 60;
-        setupCustomMode(currentBuffer, nextBuffer, newFramerate);
+
+        if (currentBuffer.size() > 0 && totalBuffersCount > 0) {
+          setupCustomMode(currentBuffer, totalBuffersCount, newFramerate);
+        } else {
+          Serial.println("[API] Custom mode - No buffer data received");
+        }
       } else {
         Serial.print("[API] WARNING: Unknown mode received: ");
         Serial.println(newMode);
@@ -542,9 +664,28 @@ void setup() {
     Serial.println("\n[WiFi] ERROR: Failed to connect!");
   }
 
+  // Create mutex for protecting shared state
+  stateMutex = xSemaphoreCreateMutex();
+  if (stateMutex == NULL) {
+    Serial.println("[Setup] ERROR: Failed to create state mutex!");
+  } else {
+    Serial.println("[Setup] State mutex created");
+  }
+
   Serial.println();
   Serial.println("[Setup] Initializing LED state from server...");
   checkLedState();
+
+  // Create background task for API requests
+  xTaskCreate(
+    apiTask,           // Task function
+    "API Task",        // Task name
+    8192,             // Stack size (bytes)
+    NULL,              // Parameters
+    1,                 // Priority (1 = low, higher = more priority)
+    NULL               // Task handle
+  );
+  Serial.println("[Setup] Background API task created");
 
   Serial.println("\n========================================");
   Serial.println("Setup complete. Entering main loop...");
@@ -562,21 +703,21 @@ void loop() {
     Serial.println("\n[WiFi] Reconnected!");
   }
 
-  // Call loop function for current mode
-  if (currentMode == "simple") {
+  // Call loop function for current mode (read currentMode with mutex)
+  String modeToUse = "simple";
+  if (xSemaphoreTake(stateMutex, 10 / portTICK_PERIOD_MS) == pdTRUE) {
+    modeToUse = currentMode;
+    xSemaphoreGive(stateMutex);
+  }
+
+  if (modeToUse == "simple") {
     loopSimpleMode();
-  } else if (currentMode == "loop") {
+  } else if (modeToUse == "loop") {
     loopLoopMode();
-  } else if (currentMode == "custom") {
+  } else if (modeToUse == "custom") {
     loopCustomMode();
   }
 
-  // Check API periodically
-  unsigned long currentTime = millis();
-  if (currentTime - lastCheckTime >= checkInterval) {
-    lastCheckTime = currentTime;
-    checkLedState();
-  }
-
-  delay(50);
+  // Small delay to prevent watchdog issues
+  delay(10);
 }
