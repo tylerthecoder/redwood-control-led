@@ -11,13 +11,13 @@ interface LoopMode {
     delay: number;
 }
 
-interface CustomMode {
-    mode: "custom";
+interface ScriptMode {
+    mode: "script";
     buffers: number[][];
     framerate: number;
 }
 
-export type LedState = SimpleMode | LoopMode | CustomMode;
+export type LedState = SimpleMode | LoopMode | ScriptMode;
 
 // Direct state variable
 let ledState: LedState = {
@@ -31,11 +31,6 @@ export function updateState(newState: LedState) {
     ledState = newState;
 }
 
-// Export getter function to access state
-export function getLedState(): LedState {
-    return ledState;
-}
-
-// Export the state directly (for backward compatibility)
+// Export the state directly
 export { ledState };
 

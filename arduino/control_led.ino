@@ -21,16 +21,25 @@ const char* bufferPath = "/api/control/buffer";
 #define NUM_LEDS 60
 #define LED_TYPE WS2812B
 #define COLOR_ORDER GRB
+#define LED_BRIGHTNESS 80
 CRGB leds[NUM_LEDS];
+
+// Configuration constants
+const int MAX_LOOP_COLORS = 20;
+const int MAX_BUFFER_COLORS = 1800;  // 30 frames * 60 LEDs at 60fps for 0.5s
+const int JSON_DOC_SIZE_BUFFER = 20480;  // 20KB for buffer responses
+const int JSON_DOC_SIZE_ERROR = 1024;    // 1KB for error responses
+const int JSON_DOC_SIZE_API = 40960;     // 40KB for API state responses
+const int MUTEX_TIMEOUT_MS = 10;
+const unsigned long API_CHECK_INTERVAL_MS = 1000;
+const unsigned long BUFFER_FETCH_INTERVAL_MS = 20;
+const int TLS_HANDSHAKE_TIMEOUT_SEC = 10;
 
 // Global mode state
 String currentMode = "simple";
 
 // Mutex for protecting shared state between main loop and API task
 SemaphoreHandle_t stateMutex = NULL;
-
-// API check timing (for background task)
-const unsigned long checkInterval = 1000;
 
 // ============================================================================
 // HELPER FUNCTIONS
@@ -116,7 +125,7 @@ void loopSimpleMode() {
 // ============================================================================
 
 // Loop mode state
-String loopColors[20];
+String loopColors[MAX_LOOP_COLORS];
 int loopColorCount = 0;
 unsigned long loopDelay = 1000;
 unsigned long lastLoopUpdate = 0;
@@ -157,7 +166,7 @@ void setupLoopMode(JsonArray colors, unsigned long delay) {
     Serial.println(delay);
 
     loopDelay = delay;
-    loopColorCount = min((int)colors.size(), 20);
+    loopColorCount = min((int)colors.size(), MAX_LOOP_COLORS);
 
     for (int i = 0; i < loopColorCount; i++) {
       loopColors[i] = colors[i] | "#FFFFFF";
@@ -200,7 +209,7 @@ void setupLoopMode(JsonArray colors, unsigned long delay) {
 // Loop loop mode (called every loop iteration)
 void loopLoopMode() {
   // Take mutex briefly to read state
-  if (xSemaphoreTake(stateMutex, 10 / portTICK_PERIOD_MS) == pdTRUE) {
+  if (xSemaphoreTake(stateMutex, MUTEX_TIMEOUT_MS / portTICK_PERIOD_MS) == pdTRUE) {
     unsigned long currentTime = millis();
     if (currentTime - lastLoopUpdate >= loopDelay) {
       Serial.print("[LoopMode] Updating to color index ");
@@ -230,9 +239,9 @@ void loopLoopMode() {
 // ============================================================================
 
 // Custom mode state
-// 0.5 second buffers at 60fps = 30 frames * 60 LEDs = 1800 numbers per buffer
-unsigned long formatFrames[1800];  // Current buffer: 30 frames * 60 LEDs = 1800 numbers
-unsigned long formatNextFrames[1800];  // Next buffer (loaded in background)
+// 0.5 second buffers at 60fps = 30 frames * 60 LEDs = MAX_BUFFER_COLORS numbers per buffer
+unsigned long formatFrames[MAX_BUFFER_COLORS];  // Current buffer
+unsigned long formatNextFrames[MAX_BUFFER_COLORS];  // Next buffer (loaded in background)
 int formatFrameCount = 0;
 int formatNextFrameCount = 0;
 int formatFramerate = 60;
@@ -253,6 +262,14 @@ WiFiClientSecure persistentBufferClient;
 HTTPClient persistentBufferHttp;
 bool persistentBufferClientInitialized = false;
 
+// Helper function to copy buffer data
+void copyBuffer(unsigned long* dest, unsigned long* src, int frameCount) {
+  int totalColors = frameCount * NUM_LEDS;
+  for (int i = 0; i < totalColors; i++) {
+    dest[i] = src[i];
+  }
+}
+
 // Load format buffer from hex string (optimized format)
 void loadFormatBufferFromHex(String hexString, unsigned long* targetBuffer, int& frameCount) {
   Serial.print("[CustomMode] Loading buffer from hex string (length: ");
@@ -264,7 +281,7 @@ void loadFormatBufferFromHex(String hexString, unsigned long* targetBuffer, int&
   int hexLength = hexString.length();
 
   // Each color is 6 hex characters (RRGGBB)
-  for (int pos = 0; pos < hexLength && index < 1800; pos += 6) {
+  for (int pos = 0; pos < hexLength && index < MAX_BUFFER_COLORS; pos += 6) {
     if (pos + 6 <= hexLength) {
       // Extract 6-character hex string and convert to number
       String hexColor = hexString.substring(pos, pos + 6);
@@ -294,7 +311,7 @@ void loadFormatBufferFromArray(JsonArray bufferArray, unsigned long* targetBuffe
 
   for (JsonVariant value : bufferArray) {
     if (value.is<unsigned long>()) {
-      if (index < 1800) {  // Prevent buffer overflow
+      if (index < MAX_BUFFER_COLORS) {  // Prevent buffer overflow
         targetBuffer[index++] = value.as<unsigned long>();
         frameCount++;
         loadedCount++;
@@ -382,7 +399,7 @@ bool requestBufferByIndex(int bufferIndex) {
   if (!persistentBufferClientInitialized) {
     Serial.println("[CustomMode] 🔧 Initializing persistent HTTP client...");
     persistentBufferClient.setInsecure();
-    persistentBufferClient.setHandshakeTimeout(10);  // 10 second timeout
+    persistentBufferClient.setHandshakeTimeout(TLS_HANDSHAKE_TIMEOUT_SEC);
     persistentBufferClientInitialized = true;
     unsigned long initTime = millis() - initStart;
     Serial.print("[CustomMode] ✓ Client initialized in ");
@@ -439,7 +456,7 @@ bool requestBufferByIndex(int bufferIndex) {
     // Parse JSON
     Serial.println("[CustomMode] 🔍 Parsing JSON...");
     unsigned long parseStart = millis();
-    DynamicJsonDocument doc(20480);  // 20KB should be enough for a single buffer (~16KB)
+    DynamicJsonDocument doc(JSON_DOC_SIZE_BUFFER);
     DeserializationError error = deserializeJson(doc, payload);
     unsigned long parseTime = millis() - parseStart;
 
@@ -546,7 +563,7 @@ bool requestBufferByIndex(int bufferIndex) {
     Serial.println(errorPayload);
 
     // Try to parse JSON error message
-    DynamicJsonDocument errorDoc(1024);
+    DynamicJsonDocument errorDoc(JSON_DOC_SIZE_ERROR);
     DeserializationError error = deserializeJson(errorDoc, errorPayload);
     if (!error) {
       if (errorDoc.containsKey("error")) {
@@ -643,9 +660,7 @@ void setupCustomMode(int totalBuffersCount, int framerate) {
     // Copy next buffer to current buffer since requestBufferByIndex loads into formatNextFrames
     if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
       if (formatNextBufferLoaded) {
-        for (int i = 0; i < formatNextFrameCount * NUM_LEDS; i++) {
-          formatFrames[i] = formatNextFrames[i];
-        }
+        copyBuffer(formatFrames, formatNextFrames, formatNextFrameCount);
         formatFrameCount = formatNextFrameCount;
         formatNextFrameCount = 0;
         formatBufferLoaded = true;
@@ -672,7 +687,7 @@ void setupCustomMode(int totalBuffersCount, int framerate) {
 // Loop custom mode (called every loop iteration)
 void loopCustomMode() {
   // Take mutex briefly to read/update state
-  if (xSemaphoreTake(stateMutex, 10 / portTICK_PERIOD_MS) == pdTRUE) {
+  if (xSemaphoreTake(stateMutex, MUTEX_TIMEOUT_MS / portTICK_PERIOD_MS) == pdTRUE) {
     if (!formatBufferLoaded || formatFrameCount == 0) {
       if (!formatBufferLoaded) {
         Serial.println("[CustomMode] No buffer loaded, waiting...");
@@ -685,27 +700,20 @@ void loopCustomMode() {
     // Trigger immediately after buffer starts (frame 0+) to give maximum time for HTTP
     if (totalBuffers > 1 && !formatNextBufferLoaded && !bufferFetchPending) {
       int nextBufferIndex = (currentBufferIndex + 1) % totalBuffers;
+      // Modulo guarantees nextBufferIndex is always in valid range [0, totalBuffers)
 
-      // Validate the index before requesting
-      if (nextBufferIndex >= 0 && nextBufferIndex < totalBuffers) {
-        bufferToFetch = nextBufferIndex;
-        bufferFetchPending = true;
+      bufferToFetch = nextBufferIndex;
+      bufferFetchPending = true;
 
-        Serial.print("[CustomMode] Requesting background fetch of buffer index ");
-        Serial.print(nextBufferIndex);
-        Serial.print("/");
-        Serial.print(totalBuffers);
-        Serial.print(" (current buffer: ");
-        Serial.print(currentBufferIndex);
-        Serial.print(", frame: ");
-        Serial.print(currentFormatFrameIndex);
-        Serial.println(")");
-      } else {
-        Serial.print("[CustomMode] WARNING: Invalid next buffer index ");
-        Serial.print(nextBufferIndex);
-        Serial.print(", totalBuffers: ");
-        Serial.println(totalBuffers);
-      }
+      Serial.print("[CustomMode] Requesting background fetch of buffer index ");
+      Serial.print(nextBufferIndex);
+      Serial.print("/");
+      Serial.print(totalBuffers);
+      Serial.print(" (current buffer: ");
+      Serial.print(currentBufferIndex);
+      Serial.print(", frame: ");
+      Serial.print(currentFormatFrameIndex);
+      Serial.println(")");
     }
 
     unsigned long currentTime = millis();
@@ -755,10 +763,7 @@ void loopCustomMode() {
             Serial.println(" frames)");
 
             // Copy next buffer to current buffer
-            for (int i = 0; i < formatNextFrameCount * NUM_LEDS; i++) {
-              formatFrames[i] = formatNextFrames[i];
-            }
-
+            copyBuffer(formatFrames, formatNextFrames, formatNextFrameCount);
             formatFrameCount = formatNextFrameCount;
             formatNextFrameCount = 0;
             formatBufferLoaded = true;
@@ -836,7 +841,7 @@ void bufferFetchTask(void *parameter) {
     }
 
     // Check frequently for new fetch requests
-    vTaskDelay(20 / portTICK_PERIOD_MS);  // Reduced delay for faster response
+    vTaskDelay(BUFFER_FETCH_INTERVAL_MS / portTICK_PERIOD_MS);  // Reduced delay for faster response
   }
 }
 
@@ -853,7 +858,7 @@ void apiTask(void *parameter) {
     }
 
     // Wait for check interval
-    vTaskDelay(checkInterval / portTICK_PERIOD_MS);
+    vTaskDelay(API_CHECK_INTERVAL_MS / portTICK_PERIOD_MS);
   }
 }
 
@@ -883,7 +888,7 @@ void checkLedState() {
     Serial.print("[API] Response preview (first 200 chars): ");
     Serial.println(payload.substring(0, 200));
 
-    DynamicJsonDocument doc(40960);  // 40KB to handle buffer JSON with overhead
+    DynamicJsonDocument doc(JSON_DOC_SIZE_API);
     DeserializationError error = deserializeJson(doc, payload);
 
     if (!error) {
@@ -946,7 +951,7 @@ void setup() {
   Serial.println("========================================\n");
 
   FastLED.addLeds<LED_TYPE, LED_PIN, COLOR_ORDER>(leds, NUM_LEDS).setCorrection(TypicalLEDStrip);
-  FastLED.setBrightness(80);
+  FastLED.setBrightness(LED_BRIGHTNESS);
   fill_solid(leds, NUM_LEDS, CRGB::Black);
   FastLED.show();
 
@@ -956,7 +961,7 @@ void setup() {
   Serial.print("[Setup] Number of LEDs: ");
   Serial.println(NUM_LEDS);
   Serial.print("[Setup] Brightness: ");
-  Serial.println(80);
+  Serial.println(LED_BRIGHTNESS);
 
   Serial.println();
   Serial.print("[WiFi] Connecting to: ");
@@ -1038,7 +1043,7 @@ void loop() {
 
   // Call loop function for current mode (read currentMode with mutex)
   String modeToUse = "simple";
-  if (xSemaphoreTake(stateMutex, 10 / portTICK_PERIOD_MS) == pdTRUE) {
+  if (xSemaphoreTake(stateMutex, MUTEX_TIMEOUT_MS / portTICK_PERIOD_MS) == pdTRUE) {
     modeToUse = currentMode;
     xSemaphoreGive(stateMutex);
   }

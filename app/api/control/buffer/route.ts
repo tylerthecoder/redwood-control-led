@@ -5,10 +5,10 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const indexParam = searchParams.get("index");
 
-    if (ledState.mode !== "custom") {
+    if (ledState.mode !== "script") {
         return Response.json(
             {
-                error: "LED state is not in custom mode",
+                error: "LED state is not in script mode",
                 currentMode: ledState.mode,
                 message: "Animation may have been changed. Please check current mode."
             },
@@ -16,15 +16,15 @@ export async function GET(request: Request) {
         );
     }
 
-    const customState = ledState;
-    const totalBuffers = customState.buffers.length;
+    const scriptState = ledState;
+    const totalBuffers = scriptState.buffers.length;
 
     if (totalBuffers === 0) {
         return Response.json(
             {
                 error: "No buffers available",
                 totalBuffers: 0,
-                message: "Custom mode has no buffers loaded. Upload animation first."
+                message: "Script mode has no buffers loaded. Upload animation first."
             },
             { status: 400 }
         );
@@ -55,7 +55,7 @@ export async function GET(request: Request) {
         );
     }
 
-    const requestedBuffer = customState.buffers[requestedIndex] || [];
+    const requestedBuffer = scriptState.buffers[requestedIndex] || [];
 
     // Convert buffer to hex string for more efficient transfer
     // Format: continuous hex string "FF0000FF0000..." (6 chars per color)
@@ -65,7 +65,7 @@ export async function GET(request: Request) {
         buffer: hexBuffer,  // Hex string instead of number array
         bufferIndex: requestedIndex,
         totalBuffers: totalBuffers,
-        framerate: customState.framerate,
+        framerate: scriptState.framerate,
         format: 'hex',  // Indicate format for client
     });
 }

@@ -5,7 +5,7 @@ import { usePathname } from "next/navigation";
 import { useLEDState } from "../hooks/use-led-state";
 import { StateViewer } from "./state-viewer";
 
-type Mode = "simple" | "loop" | "custom";
+type Mode = "simple" | "loop" | "script";
 
 export function CurrentModeDisplay() {
     const { state } = useLEDState();
@@ -14,7 +14,7 @@ export function CurrentModeDisplay() {
     const modeLabels: Record<Mode, string> = {
         simple: "Simple",
         loop: "Loop",
-        custom: "Custom",
+        script: "Scripts",
     };
 
     return (
@@ -43,7 +43,7 @@ export function Navigation() {
     const navItems = [
         { path: "/simple", label: "Simple" },
         { path: "/loop", label: "Loop" },
-        { path: "/custom", label: "Custom" },
+        { path: "/scripts", label: "Scripts" },
     ];
 
     return (

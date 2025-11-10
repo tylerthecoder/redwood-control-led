@@ -2,7 +2,7 @@
 
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 
-type Mode = "simple" | "loop" | "custom";
+type Mode = "simple" | "loop" | "script";
 
 interface SimpleMode {
     mode: "simple";
@@ -16,13 +16,13 @@ interface LoopMode {
     delay: number;
 }
 
-interface CustomMode {
-    mode: "custom";
+interface ScriptMode {
+    mode: "script";
     frames?: string[];
     framerate: number;
 }
 
-type LedState = SimpleMode | LoopMode | CustomMode;
+type LedState = SimpleMode | LoopMode | ScriptMode;
 
 async function fetchLEDState(): Promise<LedState> {
     const response = await fetch("/api/control");

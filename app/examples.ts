@@ -1,19 +1,115 @@
-// Example generators for ControlLEDFormat
+// Preset generators for LED animations
 
 const NUM_LEDS = 60;
 const FRAMERATE = 60;
 
-export interface Example {
+export interface ScriptPreset {
     name: string;
     description: string;
     framerate: number;
+    category: string;
     generate: () => string[];
 }
 
+export interface LoopPreset {
+    name: string;
+    description: string;
+    colors: string[];
+    delay: number;
+}
+
+export interface SimplePreset {
+    name: string;
+    description: string;
+    color: string;
+}
+
+// ============================================================================
+// SCRIPT PRESETS (Custom Animations)
+// ============================================================================
+
+// AI Pulse - Breathing effect representing AI thinking
+export const aiPulsePreset: ScriptPreset = {
+    name: "AI Pulse",
+    description: "A gentle breathing pulse from deep blue to bright cyan, like an AI thinking",
+    category: "AI",
+    framerate: 60,
+    generate: () => {
+        const DURATION_SECONDS = 4;
+        const TOTAL_FRAMES = FRAMERATE * DURATION_SECONDS;
+        const frames: string[] = [];
+
+        for (let frameNum = 0; frameNum < TOTAL_FRAMES; frameNum++) {
+            // Sine wave for smooth breathing effect (0 to 1 and back)
+            const progress = Math.sin((frameNum / TOTAL_FRAMES) * Math.PI * 2);
+            const brightness = (progress + 1) / 2; // Convert to 0-1 range
+
+            // Interpolate between deep blue and cyan
+            const r = Math.floor(0 + (0 * brightness));
+            const g = Math.floor(100 + (155 * brightness));
+            const b = Math.floor(200 + (55 * brightness));
+
+            const color = rgbToHex(r, g, b);
+            const colors: string[] = Array(NUM_LEDS).fill(color);
+            frames.push(colors.join(","));
+        }
+
+        return frames;
+    },
+};
+
+// Neural Network - Multiple speeds representing parallel processing
+export const neuralNetworkPreset: ScriptPreset = {
+    name: "Neural Network",
+    description: "Multiple information streams flowing at different speeds, like neural connections",
+    category: "AI",
+    framerate: 60,
+    generate: () => {
+        const DURATION_SECONDS = 10;
+        const TOTAL_FRAMES = FRAMERATE * DURATION_SECONDS;
+
+        // Three "neurons" with different colors and speeds
+        const neurons = [
+            { color: "#00FFFF", speed: 1.2 },   // Cyan - fast
+            { color: "#FF00FF", speed: 0.8 },   // Magenta - medium
+            { color: "#FFFF00", speed: 0.5 },   // Yellow - slow
+        ];
+
+        const frames: string[] = [];
+
+        for (let frameNum = 0; frameNum < TOTAL_FRAMES; frameNum++) {
+            // Track which neurons are at each LED position
+            const ledLights: string[][] = Array(NUM_LEDS).fill(null).map(() => []);
+
+            // Calculate position for each neuron
+            for (const neuron of neurons) {
+                const position = (frameNum * neuron.speed) % NUM_LEDS;
+                const ledIndex = Math.floor(position);
+                ledLights[ledIndex].push(neuron.color);
+            }
+
+            // Generate colors for each LED, averaging if multiple neurons overlap
+            const colors: string[] = [];
+            for (let ledIndex = 0; ledIndex < NUM_LEDS; ledIndex++) {
+                if (ledLights[ledIndex].length > 0) {
+                    colors.push(averageColors(ledLights[ledIndex]));
+                } else {
+                    colors.push("#000000");
+                }
+            }
+
+            frames.push(colors.join(","));
+        }
+
+        return frames;
+    },
+};
+
 // Red and Green Animation - 10 seconds
-export const redGreenExample: Example = {
-    name: "Red and Green",
-    description: "First 30 LEDs red, last 30 LEDs green for 10 seconds",
+export const redGreenPreset: ScriptPreset = {
+    name: "Split Colors",
+    description: "First 30 LEDs red, last 30 LEDs green",
+    category: "Basic",
     framerate: 60,
     generate: () => {
         const DURATION_SECONDS = 10;
@@ -41,9 +137,10 @@ export const redGreenExample: Example = {
 };
 
 // Ring Animation - single light moving around
-export const ringExample: Example = {
-    name: "Ring Animation",
-    description: "Single light moving around the ring, completing one full rotation",
+export const ringPreset: ScriptPreset = {
+    name: "Chase",
+    description: "Single light moving around the ring",
+    category: "Basic",
     framerate: 60,
     generate: () => {
         const ON_COLOR = "#FFFFFF";
@@ -104,9 +201,10 @@ function averageColors(colorHexes: string[]): string {
 }
 
 // Multi-Ring Animation - 4 lights moving at different speeds
-export const multiRingExample: Example = {
-    name: "Multi-Ring Animation",
-    description: "4 different colored lights moving around the ring at different speeds, colors blend when overlapping",
+export const multiRingPreset: ScriptPreset = {
+    name: "Rainbow Chase",
+    description: "Multiple colored lights moving at different speeds with color blending",
+    category: "Advanced",
     framerate: 60,
     generate: () => {
         const DURATION_SECONDS = 10;
@@ -153,9 +251,106 @@ export const multiRingExample: Example = {
     },
 };
 
-export const examples: Example[] = [
-    redGreenExample,
-    ringExample,
-    multiRingExample,
+// ============================================================================
+// LOOP PRESETS
+// ============================================================================
+
+export const loopPresets: LoopPreset[] = [
+    {
+        name: "Warm Sunset",
+        description: "Warm colors fading like a sunset",
+        colors: ["#FF4500", "#FF6347", "#FFD700"],
+        delay: 1500,
+    },
+    {
+        name: "Ocean Waves",
+        description: "Cool blues and teals like ocean water",
+        colors: ["#000080", "#0080FF", "#00CED1", "#40E0D0"],
+        delay: 2000,
+    },
+    {
+        name: "Forest",
+        description: "Calming green tones",
+        colors: ["#228B22", "#32CD32", "#90EE90", "#00FF00"],
+        delay: 1800,
+    },
+    {
+        name: "Party Mode",
+        description: "Vibrant colors for maximum energy",
+        colors: ["#FF0000", "#FF7F00", "#FFFF00", "#00FF00", "#0000FF", "#8B00FF"],
+        delay: 500,
+    },
+    {
+        name: "Chill Vibes",
+        description: "Relaxing purple and pink tones",
+        colors: ["#9370DB", "#DDA0DD", "#FF1493", "#4B0082"],
+        delay: 2500,
+    },
+    {
+        name: "Fire",
+        description: "Hot reds and oranges like flickering flames",
+        colors: ["#8B0000", "#FF0000", "#FF4500", "#FFA500"],
+        delay: 800,
+    },
+    {
+        name: "Ice",
+        description: "Cool whites and blues",
+        colors: ["#E0FFFF", "#AFEEEE", "#87CEEB", "#4682B4"],
+        delay: 2000,
+    },
+    {
+        name: "Neon City",
+        description: "Bright cyberpunk colors",
+        colors: ["#FF00FF", "#00FFFF", "#FFFF00", "#FF0080"],
+        delay: 1000,
+    },
+];
+
+// ============================================================================
+// SIMPLE COLOR PRESETS
+// ============================================================================
+
+export const simplePresets: SimplePreset[] = [
+    // Primary Colors
+    { name: "Red", description: "Classic red", color: "#FF0000" },
+    { name: "Green", description: "Classic green", color: "#00FF00" },
+    { name: "Blue", description: "Classic blue", color: "#0000FF" },
+
+    // Secondary Colors
+    { name: "Yellow", description: "Bright yellow", color: "#FFFF00" },
+    { name: "Cyan", description: "Bright cyan", color: "#00FFFF" },
+    { name: "Magenta", description: "Bright magenta", color: "#FF00FF" },
+
+    // Warm Tones
+    { name: "Orange", description: "Warm orange", color: "#FFA500" },
+    { name: "Coral", description: "Soft coral", color: "#FF7F50" },
+    { name: "Gold", description: "Golden glow", color: "#FFD700" },
+
+    // Cool Tones
+    { name: "Purple", description: "Royal purple", color: "#800080" },
+    { name: "Indigo", description: "Deep indigo", color: "#4B0082" },
+    { name: "Teal", description: "Ocean teal", color: "#008080" },
+
+    // Pastels
+    { name: "Lavender", description: "Soft lavender", color: "#E6E6FA" },
+    { name: "Mint", description: "Fresh mint", color: "#98FF98" },
+    { name: "Peach", description: "Gentle peach", color: "#FFDAB9" },
+
+    // Neutrals
+    { name: "White", description: "Pure white", color: "#FFFFFF" },
+    { name: "Warm White", description: "Cozy warm white", color: "#FFF8DC" },
+    { name: "Off", description: "Lights off", color: "#000000" },
+];
+
+// ============================================================================
+// EXPORTS
+// ============================================================================
+
+export const scriptPresets: ScriptPreset[] = [
+    aiPulsePreset,
+    neuralNetworkPreset,
+    redGreenPreset,
+    ringPreset,
+    multiRingPreset,
 ];
 
