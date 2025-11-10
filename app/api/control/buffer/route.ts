@@ -57,11 +57,16 @@ export async function GET(request: Request) {
 
     const requestedBuffer = customState.buffers[requestedIndex] || [];
 
+    // Convert buffer to hex string for more efficient transfer
+    // Format: continuous hex string "FF0000FF0000..." (6 chars per color)
+    const hexBuffer = requestedBuffer.map(n => n.toString(16).padStart(6, '0')).join('');
+
     return Response.json({
-        buffer: requestedBuffer,
+        buffer: hexBuffer,  // Hex string instead of number array
         bufferIndex: requestedIndex,
         totalBuffers: totalBuffers,
         framerate: customState.framerate,
+        format: 'hex',  // Indicate format for client
     });
 }
 

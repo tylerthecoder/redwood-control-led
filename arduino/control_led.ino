@@ -248,8 +248,37 @@ bool formatNextBufferLoaded = false;
 int bufferToFetch = -1;           // Which buffer index to fetch (-1 = none)
 bool bufferFetchPending = false;  // Whether a fetch request is pending
 
-// Load format buffer from JSON array
-void loadFormatBuffer(JsonArray bufferArray, unsigned long* targetBuffer, int& frameCount) {
+// Load format buffer from hex string (optimized format)
+void loadFormatBufferFromHex(String hexString, unsigned long* targetBuffer, int& frameCount) {
+  Serial.print("[CustomMode] Loading buffer from hex string (length: ");
+  Serial.print(hexString.length());
+  Serial.println(")");
+
+  frameCount = 0;
+  int index = 0;
+  int hexLength = hexString.length();
+
+  // Each color is 6 hex characters (RRGGBB)
+  for (int pos = 0; pos < hexLength && index < 1800; pos += 6) {
+    if (pos + 6 <= hexLength) {
+      // Extract 6-character hex string and convert to number
+      String hexColor = hexString.substring(pos, pos + 6);
+      unsigned long color = strtoul(hexColor.c_str(), NULL, 16);
+      targetBuffer[index++] = color;
+      frameCount++;
+    }
+  }
+
+  frameCount = frameCount / NUM_LEDS;  // Convert to frame count
+  Serial.print("[CustomMode] Loaded ");
+  Serial.print(index);
+  Serial.print(" color values = ");
+  Serial.print(frameCount);
+  Serial.println(" frames");
+}
+
+// Load format buffer from JSON array (legacy format, kept for compatibility)
+void loadFormatBufferFromArray(JsonArray bufferArray, unsigned long* targetBuffer, int& frameCount) {
   Serial.print("[CustomMode] Loading buffer from JSON array (size: ");
   Serial.print(bufferArray.size());
   Serial.println(")");
@@ -357,9 +386,9 @@ bool requestBufferByIndex(int bufferIndex) {
     DeserializationError error = deserializeJson(doc, payload);
 
     if (!error) {
-      JsonArray buffer = doc["buffer"];
       int receivedIndex = doc["bufferIndex"] | -1;
       int receivedTotal = doc["totalBuffers"] | 0;
+      String format = doc["format"] | "array";  // Check format type
 
       Serial.print("[CustomMode] Received buffer index ");
       Serial.print(receivedIndex);
@@ -367,7 +396,9 @@ bool requestBufferByIndex(int bufferIndex) {
       Serial.print(receivedTotal);
       Serial.print(" (fetch took ");
       Serial.print(fetchDuration);
-      Serial.println("ms)");
+      Serial.print("ms, format: ");
+      Serial.print(format);
+      Serial.println(")");
 
       // Update total buffers if we got new info
       if (receivedTotal > 0) {
@@ -381,8 +412,16 @@ bool requestBufferByIndex(int bufferIndex) {
         }
       }
 
-      // Load the buffer into next buffer slot
-      loadFormatBuffer(buffer, formatNextFrames, formatNextFrameCount);
+      // Load the buffer into next buffer slot using appropriate parser
+      if (format == "hex") {
+        // New optimized hex string format
+        String hexBuffer = doc["buffer"] | "";
+        loadFormatBufferFromHex(hexBuffer, formatNextFrames, formatNextFrameCount);
+      } else {
+        // Legacy JSON array format
+        JsonArray buffer = doc["buffer"];
+        loadFormatBufferFromArray(buffer, formatNextFrames, formatNextFrameCount);
+      }
 
       if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
         formatNextBufferLoaded = (formatNextFrameCount > 0);
