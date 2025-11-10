@@ -93,7 +93,7 @@ export async function POST(request: Request) {
                 colors: body.colors || (ledState.mode === "loop" ? ledState.colors : ["#FF0000", "#00FF00", "#0000FF"]),
                 delay: body.delay !== undefined ? body.delay : (ledState.mode === "loop" ? ledState.delay : 1000),
             });
-        } else if (body.mode === "format") {
+        } else if (body.mode === "custom") {
             // Validate format if frames are provided
             if (body.frames) {
                 const validation = validateFormat(body.frames);
@@ -105,22 +105,22 @@ export async function POST(request: Request) {
                 }
 
                 // Process frames into buffers
-                const framerate = body.framerate !== undefined ? body.framerate : (ledState.mode === "format" ? ledState.framerate : 60);
+                const framerate = body.framerate !== undefined ? body.framerate : (ledState.mode === "custom" ? ledState.framerate : 60);
                 const buffers = processFormatFrames(body.frames, framerate);
 
                 updateState({
-                    mode: "format",
+                    mode: "custom",
                     buffers,
                     framerate,
                     currentBufferIndex: 0,
                 });
             } else {
                 // Just update framerate or other properties
-                if (ledState.mode === "format") {
+                if (ledState.mode === "custom") {
                     ledState.framerate = body.framerate !== undefined ? body.framerate : ledState.framerate;
                 } else {
                     updateState({
-                        mode: "format",
+                        mode: "custom",
                         buffers: [],
                         framerate: body.framerate !== undefined ? body.framerate : 60,
                         currentBufferIndex: 0,
@@ -150,19 +150,19 @@ export async function POST(request: Request) {
 
 export async function GET() {
     // Return current LED state with mode
-    // For format mode, return current buffer and next buffer
-    if (ledState.mode === "format") {
-        const formatState = ledState;
-        const currentBuffer = formatState.buffers[formatState.currentBufferIndex] || [];
-        const nextBufferIndex = (formatState.currentBufferIndex + 1) % formatState.buffers.length;
-        const nextBuffer = formatState.buffers[nextBufferIndex] || [];
+    // For custom mode, return current buffer and next buffer
+    if (ledState.mode === "custom") {
+        const customState = ledState;
+        const currentBuffer = customState.buffers[customState.currentBufferIndex] || [];
+        const nextBufferIndex = (customState.currentBufferIndex + 1) % customState.buffers.length;
+        const nextBuffer = customState.buffers[nextBufferIndex] || [];
 
         return Response.json({
-            ...formatState,
+            ...customState,
             currentBuffer,
             nextBuffer,
-            currentBufferIndex: formatState.currentBufferIndex,
-            totalBuffers: formatState.buffers.length,
+            currentBufferIndex: customState.currentBufferIndex,
+            totalBuffers: customState.buffers.length,
         });
     }
 

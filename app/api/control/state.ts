@@ -11,14 +11,14 @@ interface LoopMode {
     delay: number;
 }
 
-interface FormatMode {
-    mode: "format";
+interface CustomMode {
+    mode: "custom";
     buffers: number[][];
     framerate: number;
     currentBufferIndex: number;
 }
 
-export type LedState = SimpleMode | LoopMode | FormatMode;
+export type LedState = SimpleMode | LoopMode | CustomMode;
 
 // Use a mutable object that can be reassigned
 const state: { value: LedState } = {
