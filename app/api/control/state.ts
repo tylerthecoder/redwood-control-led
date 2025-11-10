@@ -15,7 +15,6 @@ interface CustomMode {
     mode: "custom";
     buffers: number[][];
     framerate: number;
-    currentBufferIndex: number;
 }
 
 export type LedState = SimpleMode | LoopMode | CustomMode;

@@ -1,5 +1,5 @@
 // Global variable to store the LED control state
-import { ledState, updateState, type LedState } from "./state";
+import { ledState, updateState } from "./state";
 
 const BUFFER_DURATION_SECONDS = 0.5; // 0.5 second buffers to reduce JSON size (~16KB vs ~32KB)
 const NUM_LEDS = 60;
@@ -11,10 +11,6 @@ function hexToNumber(hex: string): number {
     return parseInt(cleaned, 16);
 }
 
-// Convert 24-bit RGB number to hex string (for display purposes)
-function numberToHex(num: number): string {
-    return `#${num.toString(16).padStart(6, "0").toUpperCase()}`;
-}
 
 // Convert frames from hex strings to numeric format and split into buffers
 function processFormatFrames(frames: string[], framerate: number): number[][] {
@@ -112,7 +108,6 @@ export async function POST(request: Request) {
                     mode: "custom",
                     buffers,
                     framerate,
-                    currentBufferIndex: 0,
                 });
             } else {
                 // Just update framerate or other properties
@@ -122,11 +117,11 @@ export async function POST(request: Request) {
                         framerate: body.framerate !== undefined ? body.framerate : ledState.framerate,
                     });
                 } else {
+                    // Initialize with empty buffers if no frames provided
                     updateState({
                         mode: "custom",
                         buffers: [],
                         framerate: body.framerate !== undefined ? body.framerate : 60,
-                        currentBufferIndex: 0,
                     });
                 }
             }
@@ -157,43 +152,14 @@ export async function POST(request: Request) {
     }
 }
 
-export async function GET(request: Request) {
-    const { searchParams } = new URL(request.url);
-    const bufferIndexParam = searchParams.get("bufferIndex");
-
+export async function GET() {
     // Return current LED state with mode
-    // For custom mode, return specific buffer if bufferIndex is provided
+    // For custom mode, only return mode, totalBuffers, and framerate (no buffers)
     if (ledState.mode === "custom") {
         const customState = ledState;
-        const totalBuffers = customState.buffers.length;
-
-        if (bufferIndexParam !== null) {
-            // Return specific buffer requested by Arduino
-            const requestedIndex = parseInt(bufferIndexParam, 10);
-            if (!isNaN(requestedIndex) && requestedIndex >= 0 && requestedIndex < totalBuffers) {
-                const requestedBuffer = customState.buffers[requestedIndex] || [];
-                return Response.json({
-                    mode: "custom",
-                    buffer: requestedBuffer,
-                    bufferIndex: requestedIndex,
-                    totalBuffers: totalBuffers,
-                    framerate: customState.framerate,
-                });
-            } else {
-                return Response.json(
-                    { error: `Invalid bufferIndex: ${bufferIndexParam}. Must be between 0 and ${totalBuffers - 1}` },
-                    { status: 400 }
-                );
-            }
-        }
-
-        // No bufferIndex specified, return current buffer info (don't include all buffers)
-        const currentBuffer = customState.buffers[customState.currentBufferIndex] || [];
         return Response.json({
             mode: "custom",
-            currentBuffer,
-            currentBufferIndex: customState.currentBufferIndex,
-            totalBuffers: totalBuffers,
+            totalBuffers: customState.buffers.length,
             framerate: customState.framerate,
         });
     }
