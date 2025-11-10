@@ -187,13 +187,14 @@ export async function GET(request: Request) {
             }
         }
 
-        // No bufferIndex specified, return current buffer info
+        // No bufferIndex specified, return current buffer info (don't include all buffers)
         const currentBuffer = customState.buffers[customState.currentBufferIndex] || [];
         return Response.json({
-            ...customState,
+            mode: "custom",
             currentBuffer,
             currentBufferIndex: customState.currentBufferIndex,
             totalBuffers: totalBuffers,
+            framerate: customState.framerate,
         });
     }
 
