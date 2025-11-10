@@ -14,7 +14,7 @@ function hexToNumber(hex: string): number {
 
 // Convert frames from hex strings to numeric format and split into buffers
 function processFormatFrames(frames: string[], framerate: number): number[][] {
-    const framesPerBuffer = framerate * BUFFER_DURATION_SECONDS;
+    const framesPerBuffer = Math.floor(framerate * BUFFER_DURATION_SECONDS);
     const buffers: number[][] = [];
 
     for (let i = 0; i < frames.length; i += framesPerBuffer) {
@@ -144,11 +144,11 @@ export async function POST(request: Request) {
             ...ledState,
         });
     } catch {
-        // If no body, just return current state
+        // Handle JSON parsing errors or other request errors
         return Response.json({
-            success: true,
-            ...ledState,
-        });
+            success: false,
+            error: "Failed to process request: invalid JSON or malformed data"
+        }, { status: 400 });
     }
 }
 

@@ -243,7 +243,10 @@ int currentBufferIndex = 0;       // Which buffer we're currently playing
 int totalBuffers = 0;              // Total number of buffers in sequence
 bool formatBufferLoaded = false;
 bool formatNextBufferLoaded = false;
-bool formatNextBufferRequested = false;  // Track if we've requested the next buffer
+
+// Buffer fetch task communication
+int bufferToFetch = -1;           // Which buffer index to fetch (-1 = none)
+bool bufferFetchPending = false;  // Whether a fetch request is pending
 
 // Load format buffer from JSON array
 void loadFormatBuffer(JsonArray bufferArray, unsigned long* targetBuffer, int& frameCount) {
@@ -257,9 +260,14 @@ void loadFormatBuffer(JsonArray bufferArray, unsigned long* targetBuffer, int& f
 
   for (JsonVariant value : bufferArray) {
     if (value.is<unsigned long>()) {
-      targetBuffer[index++] = value.as<unsigned long>();
-      frameCount++;
-      loadedCount++;
+      if (index < 1800) {  // Prevent buffer overflow
+        targetBuffer[index++] = value.as<unsigned long>();
+        frameCount++;
+        loadedCount++;
+      } else {
+        Serial.println("[CustomMode] WARNING: Buffer overflow prevented - data truncated!");
+        break;
+      }
     } else {
       Serial.print("[CustomMode] Warning: Skipping non-numeric value at index ");
       Serial.println(index);
@@ -276,6 +284,15 @@ void loadFormatBuffer(JsonArray bufferArray, unsigned long* targetBuffer, int& f
 
 // Display a frame from numeric buffer
 void displayFormatFrame(int frameIndex) {
+  // Bounds check to prevent reading garbage memory
+  if (frameIndex < 0 || frameIndex >= formatFrameCount) {
+    Serial.print("[CustomMode] ERROR: Invalid frame index ");
+    Serial.print(frameIndex);
+    Serial.print(", max is ");
+    Serial.println(formatFrameCount - 1);
+    return;
+  }
+
   int startIndex = frameIndex * NUM_LEDS;
   for (int i = 0; i < NUM_LEDS; i++) {
     unsigned long color = formatFrames[startIndex + i];
@@ -336,7 +353,7 @@ bool requestBufferByIndex(int bufferIndex) {
 
       if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
         formatNextBufferLoaded = (formatNextFrameCount > 0);
-        formatNextBufferRequested = false;
+        bufferFetchPending = false;  // Fetch complete
         xSemaphoreGive(stateMutex);
       }
 
@@ -356,7 +373,7 @@ bool requestBufferByIndex(int bufferIndex) {
   http.end();
 
   if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
-    formatNextBufferRequested = false;
+    bufferFetchPending = false;  // Fetch failed
     xSemaphoreGive(stateMutex);
   }
 
@@ -387,7 +404,8 @@ void setupCustomMode(int totalBuffersCount, int framerate) {
     currentMode = "custom";
     totalBuffers = totalBuffersCount;
     currentBufferIndex = 0;
-    formatNextBufferRequested = false;
+    bufferToFetch = -1;
+    bufferFetchPending = false;
     formatFramerate = framerate;
     formatFrameDelay = (1000 + formatFramerate / 2) / formatFramerate;
     xSemaphoreGive(stateMutex);
@@ -437,18 +455,15 @@ void loopCustomMode() {
       return;
     }
 
-    // Prefetch next buffer if we don't have it and there are multiple buffers
-    if (totalBuffers > 1 && !formatNextBufferLoaded && !formatNextBufferRequested) {
+    // Request next buffer fetch from background task (non-blocking)
+    // Trigger early in playback (after a few frames) to ensure buffer is ready
+    if (totalBuffers > 1 && !formatNextBufferLoaded && !bufferFetchPending && currentFormatFrameIndex >= 5) {
       int nextBufferIndex = (currentBufferIndex + 1) % totalBuffers;
-      formatNextBufferRequested = true;
-      xSemaphoreGive(stateMutex);
+      bufferToFetch = nextBufferIndex;
+      bufferFetchPending = true;
 
-      Serial.print("[CustomMode] Prefetching next buffer index ");
+      Serial.print("[CustomMode] Requesting background fetch of buffer index ");
       Serial.println(nextBufferIndex);
-      requestBufferByIndex(nextBufferIndex);
-
-      // Take mutex again to continue
-      xSemaphoreTake(stateMutex, portMAX_DELAY);
     }
 
     unsigned long currentTime = millis();
@@ -506,7 +521,7 @@ void loopCustomMode() {
             formatNextFrameCount = 0;
             formatBufferLoaded = true;
             formatNextBufferLoaded = false;
-            formatNextBufferRequested = false;
+            bufferFetchPending = false;  // Ready for next fetch request
 
             // Manually modulo buffer index
             currentBufferIndex = (currentBufferIndex + 1) % totalBuffers;
@@ -514,9 +529,10 @@ void loopCustomMode() {
             Serial.print("[CustomMode] Now playing buffer index ");
             Serial.println(currentBufferIndex);
           } else {
-            Serial.println("[CustomMode] No next buffer available, looping current buffer");
-            // Still increment buffer index for tracking
-            currentBufferIndex = (currentBufferIndex + 1) % totalBuffers;
+            Serial.println("[CustomMode] No next buffer available, retrying current buffer");
+            // Don't increment buffer index - we need to retry fetching the next buffer
+            // currentBufferIndex stays the same so we request the correct buffer next time
+            bufferFetchPending = false;  // Allow retry on next opportunity
           }
 
           // Reset timing and frame index
@@ -528,14 +544,10 @@ void loopCustomMode() {
         // Display first frame of new buffer immediately (outside mutex)
         displayFormatFrame(0);
 
-        // Also display frame 1 immediately to eliminate pause between buffers
-        delay(1);  // Minimal delay for frame 0 visibility
-        displayFormatFrame(1);
-
-        // Update state for frame 2 (next frame to display)
+        // Update state to start from frame 1 on next iteration
         if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
-          currentFormatFrameIndex = 2;  // Next frame will be 2
-          lastFormatFrameUpdate = millis();  // Reset timing for frame 2
+          currentFormatFrameIndex = 1;  // Next frame will be 1
+          lastFormatFrameUpdate = millis();  // Reset timing for proper framerate
           xSemaphoreGive(stateMutex);
         }
       }
@@ -548,6 +560,33 @@ void loopCustomMode() {
 // ============================================================================
 // API FUNCTIONS
 // ============================================================================
+
+// Background task to fetch buffers for custom mode (non-blocking)
+void bufferFetchTask(void *parameter) {
+  Serial.println("[Buffer Fetch Task] Background buffer fetch task started");
+
+  while (true) {
+    // Check if there's a buffer to fetch
+    int indexToFetch = -1;
+    if (xSemaphoreTake(stateMutex, 10 / portTICK_PERIOD_MS) == pdTRUE) {
+      if (bufferFetchPending && bufferToFetch >= 0) {
+        indexToFetch = bufferToFetch;
+        bufferToFetch = -1;  // Clear request
+      }
+      xSemaphoreGive(stateMutex);
+    }
+
+    // Fetch the buffer if needed (outside of mutex)
+    if (indexToFetch >= 0 && WiFi.status() == WL_CONNECTED) {
+      Serial.print("[Buffer Fetch Task] Fetching buffer index ");
+      Serial.println(indexToFetch);
+      requestBufferByIndex(indexToFetch);
+    }
+
+    // Check frequently for new fetch requests
+    vTaskDelay(50 / portTICK_PERIOD_MS);
+  }
+}
 
 // Background task to check LED state from API
 void apiTask(void *parameter) {
@@ -717,6 +756,17 @@ void setup() {
     NULL               // Task handle
   );
   Serial.println("[Setup] Background API task created");
+
+  // Create background task for buffer fetching (non-blocking)
+  xTaskCreate(
+    bufferFetchTask,   // Task function
+    "Buffer Fetch",    // Task name
+    8192,             // Stack size (bytes)
+    NULL,              // Parameters
+    1,                 // Priority (1 = low, same as API task)
+    NULL               // Task handle
+  );
+  Serial.println("[Setup] Background buffer fetch task created");
 
   Serial.println("\n========================================");
   Serial.println("Setup complete. Entering main loop...");
