@@ -248,6 +248,11 @@ bool formatNextBufferLoaded = false;
 int bufferToFetch = -1;           // Which buffer index to fetch (-1 = none)
 bool bufferFetchPending = false;  // Whether a fetch request is pending
 
+// Persistent HTTP client for buffer fetches (reuses connection)
+WiFiClientSecure persistentBufferClient;
+HTTPClient persistentBufferHttp;
+bool persistentBufferClientInitialized = false;
+
 // Load format buffer from hex string (optimized format)
 void loadFormatBufferFromHex(String hexString, unsigned long* targetBuffer, int& frameCount) {
   Serial.print("[CustomMode] Loading buffer from hex string (length: ");
@@ -334,12 +339,21 @@ void displayFormatFrame(int frameIndex) {
 bool requestBufferByIndex(int bufferIndex) {
   unsigned long fetchStartTime = millis();
 
+  Serial.println("====================================");
+  Serial.print("[CustomMode] 🚀 BUFFER FETCH START - Buffer index ");
+  Serial.print(bufferIndex);
+  Serial.print(" at ");
+  Serial.print(fetchStartTime);
+  Serial.println("ms");
+
   // Validate buffer index before making request
+  unsigned long validationStart = millis();
   int currentTotalBuffers = 0;
   if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
     currentTotalBuffers = totalBuffers;
     xSemaphoreGive(stateMutex);
   }
+  unsigned long validationTime = millis() - validationStart;
 
   if (bufferIndex < 0 || bufferIndex >= currentTotalBuffers) {
     Serial.print("[CustomMode] ERROR: Buffer index ");
@@ -355,50 +369,95 @@ bool requestBufferByIndex(int bufferIndex) {
     return false;
   }
 
-  Serial.print("[CustomMode] Requesting buffer index ");
+  Serial.print("[CustomMode] ✓ Validation: ");
+  Serial.print(validationTime);
+  Serial.print("ms (buffer ");
   Serial.print(bufferIndex);
-  Serial.print(" of ");
-  Serial.println(currentTotalBuffers);
+  Serial.print("/");
+  Serial.print(currentTotalBuffers);
+  Serial.println(")");
 
-  WiFiClientSecure client;
-  HTTPClient http;
-
-  client.setInsecure();
+  // Initialize persistent client on first use
+  unsigned long initStart = millis();
+  if (!persistentBufferClientInitialized) {
+    Serial.println("[CustomMode] 🔧 Initializing persistent HTTP client...");
+    persistentBufferClient.setInsecure();
+    persistentBufferClient.setHandshakeTimeout(10);  // 10 second timeout
+    persistentBufferClientInitialized = true;
+    unsigned long initTime = millis() - initStart;
+    Serial.print("[CustomMode] ✓ Client initialized in ");
+    Serial.print(initTime);
+    Serial.println("ms");
+  } else {
+    Serial.println("[CustomMode] ♻️  Reusing existing HTTP connection");
+  }
 
   String url = String(serverHost) + bufferPath + "?index=" + String(bufferIndex);
-  Serial.print("[CustomMode] GET URL: ");
+  Serial.print("[CustomMode] 🌐 URL: ");
   Serial.println(url);
 
-  http.begin(client, url);
-  int httpCode = http.GET();
+  // Begin connection
+  unsigned long beginStart = millis();
+  persistentBufferHttp.begin(persistentBufferClient, url);
+  persistentBufferHttp.addHeader("Connection", "keep-alive");
+  persistentBufferHttp.setReuse(true);  // Enable connection reuse
+  unsigned long beginTime = millis() - beginStart;
+  Serial.print("[CustomMode] ✓ http.begin(): ");
+  Serial.print(beginTime);
+  Serial.println("ms");
 
-  unsigned long fetchDuration = millis() - fetchStartTime;
+  // Send GET request
+  Serial.println("[CustomMode] 📤 Sending GET request...");
+  unsigned long requestStart = millis();
+  int httpCode = persistentBufferHttp.GET();
+  unsigned long requestTime = millis() - requestStart;
+  unsigned long totalTime = millis() - fetchStartTime;
 
-  Serial.print("[CustomMode] HTTP Response code: ");
-  Serial.print(httpCode);
-  Serial.print(", Time: ");
-  Serial.print(fetchDuration);
+  Serial.println("------------------------------------");
+  Serial.print("[CustomMode] 📥 HTTP Response: ");
+  Serial.println(httpCode);
+  Serial.print("[CustomMode] ⏱️  Request time: ");
+  Serial.print(requestTime);
+  Serial.println("ms");
+  Serial.print("[CustomMode] ⏱️  Total time so far: ");
+  Serial.print(totalTime);
   Serial.println("ms");
 
   if (httpCode > 0 && httpCode == HTTP_CODE_OK) {
-    String payload = http.getString();
+    // Read payload
+    Serial.println("[CustomMode] 📖 Reading response payload...");
+    unsigned long payloadStart = millis();
+    String payload = persistentBufferHttp.getString();
+    unsigned long payloadTime = millis() - payloadStart;
+
+    Serial.print("[CustomMode] ✓ Payload read: ");
+    Serial.print(payload.length());
+    Serial.print(" bytes in ");
+    Serial.print(payloadTime);
+    Serial.println("ms");
+
+    // Parse JSON
+    Serial.println("[CustomMode] 🔍 Parsing JSON...");
+    unsigned long parseStart = millis();
     DynamicJsonDocument doc(20480);  // 20KB should be enough for a single buffer (~16KB)
     DeserializationError error = deserializeJson(doc, payload);
+    unsigned long parseTime = millis() - parseStart;
+
+    Serial.print("[CustomMode] ✓ JSON parsed in ");
+    Serial.print(parseTime);
+    Serial.println("ms");
 
     if (!error) {
       int receivedIndex = doc["bufferIndex"] | -1;
       int receivedTotal = doc["totalBuffers"] | 0;
       String format = doc["format"] | "array";  // Check format type
 
-      Serial.print("[CustomMode] Received buffer index ");
+      Serial.print("[CustomMode] 📦 Buffer ");
       Serial.print(receivedIndex);
-      Serial.print(" of ");
+      Serial.print("/");
       Serial.print(receivedTotal);
-      Serial.print(" (fetch took ");
-      Serial.print(fetchDuration);
-      Serial.print("ms, format: ");
-      Serial.print(format);
-      Serial.println(")");
+      Serial.print(", Format: ");
+      Serial.println(format);
 
       // Update total buffers if we got new info
       if (receivedTotal > 0) {
@@ -413,6 +472,9 @@ bool requestBufferByIndex(int bufferIndex) {
       }
 
       // Load the buffer into next buffer slot using appropriate parser
+      Serial.println("[CustomMode] 💾 Loading buffer data...");
+      unsigned long loadStart = millis();
+
       if (format == "hex") {
         // New optimized hex string format
         String hexBuffer = doc["buffer"] | "";
@@ -423,30 +485,64 @@ bool requestBufferByIndex(int bufferIndex) {
         loadFormatBufferFromArray(buffer, formatNextFrames, formatNextFrameCount);
       }
 
+      unsigned long loadTime = millis() - loadStart;
+      Serial.print("[CustomMode] ✓ Buffer loaded in ");
+      Serial.print(loadTime);
+      Serial.println("ms");
+
       if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
         formatNextBufferLoaded = (formatNextFrameCount > 0);
         bufferFetchPending = false;  // Fetch complete
         xSemaphoreGive(stateMutex);
       }
 
-      http.end();
+      unsigned long finalTotalTime = millis() - fetchStartTime;
+      Serial.println("====================================");
+      Serial.print("[CustomMode] ✅ FETCH COMPLETE - Total time: ");
+      Serial.print(finalTotalTime);
+      Serial.println("ms");
+      Serial.print("[CustomMode] 📊 Breakdown:");
+      Serial.print(" Request=");
+      Serial.print(requestTime);
+      Serial.print("ms, Payload=");
+      Serial.print(payloadTime);
+      Serial.print("ms, Parse=");
+      Serial.print(parseTime);
+      Serial.print("ms, Load=");
+      Serial.print(loadTime);
+      Serial.println("ms");
+      Serial.println("====================================\n");
+
+      // Don't call http.end() to keep connection alive for reuse
       return formatNextFrameCount > 0;
     } else {
-      Serial.print("[CustomMode] ERROR: JSON parsing failed: ");
+      Serial.println("====================================");
+      Serial.print("[CustomMode] ❌ ERROR: JSON parsing failed: ");
       Serial.println(error.c_str());
-      Serial.print("[CustomMode] Payload preview: ");
+      Serial.print("[CustomMode] Payload size: ");
+      Serial.print(payload.length());
+      Serial.println(" bytes");
+      Serial.print("[CustomMode] Payload preview (first 200 chars): ");
       Serial.println(payload.substring(0, 200));
+      Serial.println("====================================\n");
     }
   } else if (httpCode > 0) {
     // Got a non-200 HTTP response - parse the error message
-    Serial.print("[CustomMode] ERROR: HTTP ");
+    Serial.println("====================================");
+    Serial.print("[CustomMode] ❌ ERROR: HTTP ");
     Serial.print(httpCode);
     Serial.print(" - ");
-    Serial.println(http.errorToString(httpCode));
+    Serial.println(persistentBufferHttp.errorToString(httpCode));
 
-    // Try to read and parse error message from response body
-    String errorPayload = http.getString();
-    Serial.print("[CustomMode] Error response: ");
+    unsigned long errorReadStart = millis();
+    String errorPayload = persistentBufferHttp.getString();
+    unsigned long errorReadTime = millis() - errorReadStart;
+
+    Serial.print("[CustomMode] Error response (");
+    Serial.print(errorPayload.length());
+    Serial.print(" bytes, read in ");
+    Serial.print(errorReadTime);
+    Serial.println("ms):");
     Serial.println(errorPayload);
 
     // Try to parse JSON error message
@@ -474,15 +570,33 @@ bool requestBufferByIndex(int bufferIndex) {
         Serial.println(errorDoc["validRange"].as<String>());
       }
     }
+
+    unsigned long errorTotalTime = millis() - fetchStartTime;
+    Serial.print("[CustomMode] ⏱️  Total error handling time: ");
+    Serial.print(errorTotalTime);
+    Serial.println("ms");
+    Serial.println("====================================\n");
   } else {
     // Network error (no response)
-    Serial.print("[CustomMode] ERROR: Network error. Code: ");
+    Serial.println("====================================");
+    Serial.print("[CustomMode] ❌ ERROR: Network error. Code: ");
     Serial.print(httpCode);
     Serial.print(", Error: ");
-    Serial.println(http.errorToString(httpCode));
+    Serial.println(persistentBufferHttp.errorToString(httpCode));
+
+    unsigned long errorTotalTime = millis() - fetchStartTime;
+    Serial.print("[CustomMode] ⏱️  Time until error: ");
+    Serial.print(errorTotalTime);
+    Serial.println("ms");
+
+    Serial.println("[CustomMode] 🔄 Resetting connection for fresh reconnect");
+    // On error, end connection to allow fresh reconnect
+    persistentBufferHttp.end();
+    persistentBufferClientInitialized = false;
+    Serial.println("====================================\n");
   }
 
-  http.end();
+  // Don't call http.end() on success to keep connection alive
 
   if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
     bufferFetchPending = false;  // Fetch failed
