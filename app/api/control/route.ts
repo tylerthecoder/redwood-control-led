@@ -1,5 +1,5 @@
 // Global variable to store the LED control state
-import { ledState, updateState } from "./state";
+import { getLedState, updateState } from "./state";
 
 const BUFFER_DURATION_SECONDS = 0.5; // 0.5 second buffers to reduce JSON size (~16KB vs ~32KB)
 const NUM_LEDS = 60;
@@ -91,18 +91,20 @@ interface RequestBody {
 }
 
 // Mode-specific handlers
-function handleSimpleMode(body: RequestBody): void {
-    const currentSimple = ledState.mode === "simple" ? ledState : DEFAULTS.simple;
-    updateState({
+async function handleSimpleMode(body: RequestBody): Promise<void> {
+    const currentState = getLedState();
+    const currentSimple = currentState.mode === "simple" ? currentState : DEFAULTS.simple;
+    await updateState({
         mode: "simple",
         on: body.on ?? currentSimple.on,
         color: body.color || currentSimple.color,
     });
 }
 
-function handleLoopMode(body: RequestBody): void {
-    const currentLoop = ledState.mode === "loop" ? ledState : DEFAULTS.loop;
-    updateState({
+async function handleLoopMode(body: RequestBody): Promise<void> {
+    const currentState = getLedState();
+    const currentLoop = currentState.mode === "loop" ? currentState : DEFAULTS.loop;
+    await updateState({
         mode: "loop",
         colors: body.colors || currentLoop.colors,
         delay: body.delay ?? currentLoop.delay,
@@ -110,6 +112,8 @@ function handleLoopMode(body: RequestBody): void {
 }
 
 async function handleScriptMode(body: RequestBody): Promise<Response | null> {
+    const currentState = getLedState();
+
     if (body.frames) {
         // Validate and process frames
         const validation = validateFormat(body.frames);
@@ -120,39 +124,42 @@ async function handleScriptMode(body: RequestBody): Promise<Response | null> {
             );
         }
 
-        const framerate = body.framerate ?? (ledState.mode === "script" ? ledState.framerate : DEFAULTS.script.framerate);
+        const framerate = body.framerate ?? (currentState.mode === "script" ? currentState.framerate : DEFAULTS.script.framerate);
         const buffers = processFormatFrames(body.frames, framerate);
 
-        updateState({
+        await updateState({
             mode: "script",
             buffers,
             framerate,
+            totalBuffers: buffers.length,
         });
-    } else if (ledState.mode === "script") {
+    } else if (currentState.mode === "script") {
         // Update framerate only
-        updateState({
-            ...ledState,
-            framerate: body.framerate ?? ledState.framerate,
+        await updateState({
+            ...currentState,
+            framerate: body.framerate ?? currentState.framerate,
         });
     } else {
         // Initialize with empty buffers
-        updateState({
+        await updateState({
             mode: "script",
             buffers: [],
             framerate: body.framerate ?? DEFAULTS.script.framerate,
+            totalBuffers: 0,
         });
     }
     return null; // Success
 }
 
-function handlePartialUpdate(body: RequestBody): void {
+async function handlePartialUpdate(body: RequestBody): Promise<void> {
     // Handle partial updates for simple mode when no mode is specified
-    if (ledState.mode === "simple") {
+    const currentState = getLedState();
+    if (currentState.mode === "simple") {
         if (body.on !== undefined || body.color !== undefined) {
-            updateState({
-                ...ledState,
-                on: body.on ?? ledState.on,
-                color: body.color || ledState.color,
+            await updateState({
+                ...currentState,
+                on: body.on ?? currentState.on,
+                color: body.color || currentState.color,
             });
         }
     }
@@ -164,20 +171,21 @@ export async function POST(request: Request) {
 
         // Route to appropriate handler based on mode
         if (body.mode === "simple") {
-            handleSimpleMode(body);
+            await handleSimpleMode(body);
         } else if (body.mode === "loop") {
-            handleLoopMode(body);
+            await handleLoopMode(body);
         } else if (body.mode === "script") {
             const errorResponse = await handleScriptMode(body);
             if (errorResponse) return errorResponse;
         } else if (body.on !== undefined || body.color !== undefined) {
             // Partial update for simple mode
-            handlePartialUpdate(body);
+            await handlePartialUpdate(body);
         }
 
+        const currentState = getLedState();
         return Response.json({
             success: true,
-            ...ledState,
+            ...currentState,
         });
     } catch {
         // Handle JSON parsing errors or other request errors
@@ -191,12 +199,14 @@ export async function POST(request: Request) {
 export async function GET() {
     // Return current LED state with mode
     // For script mode, only return mode and framerate (buffer control is on server)
-    if (ledState.mode === "script") {
+    const currentState = getLedState();
+
+    if (currentState.mode === "script") {
         return Response.json({
             mode: "script",
-            framerate: ledState.framerate,
+            framerate: currentState.framerate,
         });
     }
 
-    return Response.json(ledState);
+    return Response.json(currentState);
 }

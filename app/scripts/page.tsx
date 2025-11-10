@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { scriptPresets, type ScriptPreset } from "../examples";
 import { useLEDState } from "../hooks/use-led-state";
+import LEDPreviewModal from "../components/led-preview-modal";
 
 export default function ScriptsPage() {
     const { loading, updateState, error } = useLEDState();
@@ -10,13 +11,21 @@ export default function ScriptsPage() {
     const [framerate, setFramerate] = useState(60);
     const [formatError, setFormatError] = useState<string | null>(null);
     const [selectedPreset, setSelectedPreset] = useState<ScriptPreset | null>(null);
+    const [showPreview, setShowPreview] = useState(false);
+    const [claudeReasoning, setClaudeReasoning] = useState<string>("");
+    const [claudePythonCode, setClaudePythonCode] = useState<string>("");
+    const [claudeTimestamp, setClaudeTimestamp] = useState<string>("");
 
-    const sendToArduino = () => {
-        setFormatError(null);
-        const frames = formatText
+    const getFrames = () => {
+        return formatText
             .split("\n")
             .map((line) => line.trim())
             .filter((line) => line.length > 0);
+    };
+
+    const sendToArduino = () => {
+        setFormatError(null);
+        const frames = getFrames();
 
         if (frames.length === 0) {
             setFormatError("Please enter at least one frame");
@@ -30,12 +39,53 @@ export default function ScriptsPage() {
         });
     };
 
-    const loadPreset = (preset: ScriptPreset) => {
-        const frames = preset.generate();
-        setFormatText(frames.join("\n"));
-        setFramerate(preset.framerate);
-        setSelectedPreset(preset);
+    const openPreview = () => {
         setFormatError(null);
+        const frames = getFrames();
+
+        if (frames.length === 0) {
+            setFormatError("Please enter at least one frame");
+            return;
+        }
+
+        setShowPreview(true);
+    };
+
+    const loadPreset = async (preset: ScriptPreset) => {
+        try {
+            setFormatError(null);
+
+            // Check if this is the Claude preset by name
+            if (preset.name === "Claude's Feelings") {
+                // Fetch Claude data including reasoning
+                const response = await fetch("/api/claude-frames");
+                if (response.ok) {
+                    const data = await response.json();
+                    setClaudeReasoning(data.reasoning || "");
+                    setClaudePythonCode(data.pythonCode || "");
+                    setClaudeTimestamp(data.timestamp || "");
+                    setFormatText(data.frames.join("\n"));
+                } else {
+                    setClaudeReasoning("");
+                    setClaudePythonCode("");
+                    setClaudeTimestamp("");
+                    const frames = await preset.generate();
+                    setFormatText(frames.join("\n"));
+                }
+            } else {
+                // Clear Claude data for non-Claude presets
+                setClaudeReasoning("");
+                setClaudePythonCode("");
+                setClaudeTimestamp("");
+                const frames = await preset.generate();
+                setFormatText(frames.join("\n"));
+            }
+
+            setFramerate(preset.framerate);
+            setSelectedPreset(preset);
+        } catch (error) {
+            setFormatError(error instanceof Error ? error.message : "Failed to load preset");
+        }
     };
 
     return (
@@ -103,6 +153,45 @@ export default function ScriptsPage() {
                         </div>
                     </div>
 
+                    {/* Claude's Reasoning Section - only visible for Claude preset */}
+                    {claudeReasoning && (
+                        <div className="flex flex-col gap-4 w-full max-w-2xl">
+                            <h2 className="text-2xl font-semibold text-black dark:text-zinc-50">
+                                Claude's Thoughts
+                            </h2>
+                            <div className="p-6 rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50 dark:bg-blue-950">
+                                <div className="flex items-center gap-2 mb-3">
+                                    <span className="text-2xl">🤔</span>
+                                    <h3 className="font-semibold text-black dark:text-zinc-50">
+                                        Reasoning
+                                    </h3>
+                                    {claudeTimestamp && (
+                                        <span className="text-xs text-zinc-500 dark:text-zinc-400 ml-auto">
+                                            Generated: {new Date(claudeTimestamp).toLocaleString()}
+                                        </span>
+                                    )}
+                                </div>
+                                <div className="text-sm text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap max-h-96 overflow-y-auto">
+                                    {claudeReasoning || "No reasoning available"}
+                                </div>
+                            </div>
+
+                            {claudePythonCode && (
+                                <div className="p-6 rounded-lg border border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-950">
+                                    <div className="flex items-center gap-2 mb-3">
+                                        <span className="text-2xl">💻</span>
+                                        <h3 className="font-semibold text-black dark:text-zinc-50">
+                                            Generated Python Code
+                                        </h3>
+                                    </div>
+                                    <pre className="text-xs text-zinc-700 dark:text-zinc-300 font-mono whitespace-pre-wrap max-h-96 overflow-y-auto bg-white dark:bg-black p-4 rounded border border-zinc-200 dark:border-zinc-800">
+                                        {claudePythonCode}
+                                    </pre>
+                                </div>
+                            )}
+                        </div>
+                    )}
+
                     {/* Customize section - always visible */}
                     <div className="flex flex-col gap-6 w-full max-w-2xl">
                         <h2 className="text-2xl font-semibold text-black dark:text-zinc-50">
@@ -158,18 +247,35 @@ export default function ScriptsPage() {
                                     )}
                                 </div>
 
-                                <button
-                                    onClick={sendToArduino}
-                                    disabled={loading || !formatText.trim()}
-                                    className="h-12 rounded-full bg-foreground text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] disabled:opacity-50 disabled:cursor-not-allowed"
-                                >
-                                    {loading ? "Sending..." : "Send to Arduino"}
-                                </button>
+                                <div className="flex gap-3">
+                                    <button
+                                        onClick={openPreview}
+                                        disabled={!formatText.trim()}
+                                        className="h-12 flex-1 rounded-full bg-zinc-200 dark:bg-zinc-800 text-black dark:text-zinc-50 transition-colors hover:bg-zinc-300 dark:hover:bg-zinc-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        👁 Preview
+                                    </button>
+                                    <button
+                                        onClick={sendToArduino}
+                                        disabled={loading || !formatText.trim()}
+                                        className="h-12 flex-1 rounded-full bg-foreground text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] disabled:opacity-50 disabled:cursor-not-allowed"
+                                    >
+                                        {loading ? "Sending..." : "Send to Arduino"}
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>
                 </div>
             </main>
+
+            {/* Preview Modal */}
+            <LEDPreviewModal
+                frames={getFrames()}
+                framerate={framerate}
+                isOpen={showPreview}
+                onClose={() => setShowPreview(false)}
+            />
         </div>
     );
 }

@@ -1,36 +1,48 @@
-// Shared state for LED control
-interface SimpleMode {
-    mode: "simple";
-    on: boolean;
-    color: string;
-}
+// LED state management - uses store layer
+import { saveLEDState, getLEDState } from "../../lib/store";
+import type { LedState } from "../../lib/state";
 
-interface LoopMode {
-    mode: "loop";
-    colors: string[];
-    delay: number;
-}
-
-interface ScriptMode {
-    mode: "script";
-    buffers: number[][];
-    framerate: number;
-}
-
-export type LedState = SimpleMode | LoopMode | ScriptMode;
-
-// Direct state variable
-let ledState: LedState = {
+// In-memory cache for quick access (still needed for synchronous reads)
+let ledStateCache: LedState = {
     mode: "simple",
     on: false,
     color: "#0000FF",
 };
 
-// Helper to update state
-export function updateState(newState: LedState) {
-    ledState = newState;
+// Initialize cache from storage on module load
+let cacheInitialized = false;
+
+async function initializeCache() {
+    if (cacheInitialized) return;
+
+    try {
+        const stored = await getLEDState();
+        ledStateCache = stored;
+        console.log("[LED_STATE] Cache initialized from storage:", ledStateCache.mode);
+    } catch (error) {
+        console.error("[LED_STATE] Failed to initialize cache:", error);
+    }
+
+    cacheInitialized = true;
 }
 
-// Export the state directly
-export { ledState };
+// Initialize cache (non-blocking)
+initializeCache();
 
+// Update state - saves to storage and updates cache
+export async function updateState(newState: LedState) {
+    ledStateCache = newState;
+    await saveLEDState(newState);
+    console.log("[LED_STATE] State updated and saved:", newState.mode);
+}
+
+// Get current state from cache (synchronous for compatibility)
+export function getLedState(): LedState {
+    return ledStateCache;
+}
+
+// Refresh cache from storage (useful after external updates)
+export async function refreshState() {
+    cacheInitialized = false;
+    await initializeCache();
+}

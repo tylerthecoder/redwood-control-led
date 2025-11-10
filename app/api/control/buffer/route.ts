@@ -1,23 +1,25 @@
 // Buffer endpoint - returns a specific buffer by index with next buffer index
 // Server controls the buffer sequencing, not the client
-import { ledState } from "../state";
+import { getLedState } from "../state";
 
 export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const indexParam = searchParams.get("index");
 
-    if (ledState.mode !== "script") {
+    const currentState = getLedState();
+
+    if (currentState.mode !== "script") {
         return Response.json(
             {
                 error: "LED state is not in script mode",
-                currentMode: ledState.mode,
+                currentMode: currentState.mode,
                 message: "Animation may have been changed. Please check current mode."
             },
             { status: 400 }
         );
     }
 
-    const scriptState = ledState;
+    const scriptState = currentState;
     const totalBuffers = scriptState.buffers.length;
 
     if (totalBuffers === 0) {
@@ -56,7 +58,7 @@ export async function GET(request: Request) {
 
     // Convert buffer to hex string for more efficient transfer
     // Format: continuous hex string "FF0000FF0000..." (6 chars per color)
-    const hexBuffer = requestedBuffer.map(n => n.toString(16).padStart(6, '0')).join('');
+    const hexBuffer = requestedBuffer.map((n: number) => n.toString(16).padStart(6, '0')).join('');
 
     return Response.json({
         buffer: hexBuffer,  // Hex string instead of number array

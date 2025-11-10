@@ -10,10 +10,13 @@
     "build:arduino": "bun run scripts/build-arduino.ts"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.36.3",
+    "@neondatabase/serverless": "^0.10.4",
     "@tanstack/react-query": "^5.90.7",
     "next": "16.0.1",
     "react": "19.2.0",
-    "react-dom": "19.2.0"
+    "react-dom": "19.2.0",
+    "vercel": "^48.9.0"
   },
   "devDependencies": {
     "@tailwindcss/postcss": "^4",
