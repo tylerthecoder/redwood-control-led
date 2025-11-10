@@ -303,8 +303,33 @@ void displayFormatFrame(int frameIndex) {
 
 // Request a specific buffer by index from the API
 bool requestBufferByIndex(int bufferIndex) {
+  unsigned long fetchStartTime = millis();
+
+  // Validate buffer index before making request
+  int currentTotalBuffers = 0;
+  if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
+    currentTotalBuffers = totalBuffers;
+    xSemaphoreGive(stateMutex);
+  }
+
+  if (bufferIndex < 0 || bufferIndex >= currentTotalBuffers) {
+    Serial.print("[CustomMode] ERROR: Buffer index ");
+    Serial.print(bufferIndex);
+    Serial.print(" out of range (0-");
+    Serial.print(currentTotalBuffers - 1);
+    Serial.println("). Skipping request.");
+
+    if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
+      bufferFetchPending = false;
+      xSemaphoreGive(stateMutex);
+    }
+    return false;
+  }
+
   Serial.print("[CustomMode] Requesting buffer index ");
-  Serial.println(bufferIndex);
+  Serial.print(bufferIndex);
+  Serial.print(" of ");
+  Serial.println(currentTotalBuffers);
 
   WiFiClientSecure client;
   HTTPClient http;
@@ -318,8 +343,13 @@ bool requestBufferByIndex(int bufferIndex) {
   http.begin(client, url);
   int httpCode = http.GET();
 
+  unsigned long fetchDuration = millis() - fetchStartTime;
+
   Serial.print("[CustomMode] HTTP Response code: ");
-  Serial.println(httpCode);
+  Serial.print(httpCode);
+  Serial.print(", Time: ");
+  Serial.print(fetchDuration);
+  Serial.println("ms");
 
   if (httpCode > 0 && httpCode == HTTP_CODE_OK) {
     String payload = http.getString();
@@ -334,7 +364,10 @@ bool requestBufferByIndex(int bufferIndex) {
       Serial.print("[CustomMode] Received buffer index ");
       Serial.print(receivedIndex);
       Serial.print(" of ");
-      Serial.println(receivedTotal);
+      Serial.print(receivedTotal);
+      Serial.print(" (fetch took ");
+      Serial.print(fetchDuration);
+      Serial.println("ms)");
 
       // Update total buffers if we got new info
       if (receivedTotal > 0) {
@@ -360,11 +393,51 @@ bool requestBufferByIndex(int bufferIndex) {
       http.end();
       return formatNextFrameCount > 0;
     } else {
-      Serial.print("[CustomMode] JSON parsing failed: ");
+      Serial.print("[CustomMode] ERROR: JSON parsing failed: ");
       Serial.println(error.c_str());
+      Serial.print("[CustomMode] Payload preview: ");
+      Serial.println(payload.substring(0, 200));
+    }
+  } else if (httpCode > 0) {
+    // Got a non-200 HTTP response - parse the error message
+    Serial.print("[CustomMode] ERROR: HTTP ");
+    Serial.print(httpCode);
+    Serial.print(" - ");
+    Serial.println(http.errorToString(httpCode));
+
+    // Try to read and parse error message from response body
+    String errorPayload = http.getString();
+    Serial.print("[CustomMode] Error response: ");
+    Serial.println(errorPayload);
+
+    // Try to parse JSON error message
+    DynamicJsonDocument errorDoc(1024);
+    DeserializationError error = deserializeJson(errorDoc, errorPayload);
+    if (!error) {
+      if (errorDoc.containsKey("error")) {
+        Serial.print("[CustomMode] ❌ API Error: ");
+        Serial.println(errorDoc["error"].as<String>());
+      }
+      if (errorDoc.containsKey("message")) {
+        Serial.print("[CustomMode] 💡 Details: ");
+        Serial.println(errorDoc["message"].as<String>());
+      }
+      if (errorDoc.containsKey("currentMode")) {
+        Serial.print("[CustomMode] Current mode: ");
+        Serial.println(errorDoc["currentMode"].as<String>());
+      }
+      if (errorDoc.containsKey("totalBuffers")) {
+        Serial.print("[CustomMode] Total buffers: ");
+        Serial.println(errorDoc["totalBuffers"].as<int>());
+      }
+      if (errorDoc.containsKey("validRange")) {
+        Serial.print("[CustomMode] Valid range: ");
+        Serial.println(errorDoc["validRange"].as<String>());
+      }
     }
   } else {
-    Serial.print("[CustomMode] HTTP GET failed. Code: ");
+    // Network error (no response)
+    Serial.print("[CustomMode] ERROR: Network error. Code: ");
     Serial.print(httpCode);
     Serial.print(", Error: ");
     Serial.println(http.errorToString(httpCode));
@@ -456,14 +529,30 @@ void loopCustomMode() {
     }
 
     // Request next buffer fetch from background task (non-blocking)
-    // Trigger early in playback (after a few frames) to ensure buffer is ready
-    if (totalBuffers > 1 && !formatNextBufferLoaded && !bufferFetchPending && currentFormatFrameIndex >= 5) {
+    // Trigger immediately after buffer starts (frame 0+) to give maximum time for HTTP
+    if (totalBuffers > 1 && !formatNextBufferLoaded && !bufferFetchPending) {
       int nextBufferIndex = (currentBufferIndex + 1) % totalBuffers;
-      bufferToFetch = nextBufferIndex;
-      bufferFetchPending = true;
 
-      Serial.print("[CustomMode] Requesting background fetch of buffer index ");
-      Serial.println(nextBufferIndex);
+      // Validate the index before requesting
+      if (nextBufferIndex >= 0 && nextBufferIndex < totalBuffers) {
+        bufferToFetch = nextBufferIndex;
+        bufferFetchPending = true;
+
+        Serial.print("[CustomMode] Requesting background fetch of buffer index ");
+        Serial.print(nextBufferIndex);
+        Serial.print("/");
+        Serial.print(totalBuffers);
+        Serial.print(" (current buffer: ");
+        Serial.print(currentBufferIndex);
+        Serial.print(", frame: ");
+        Serial.print(currentFormatFrameIndex);
+        Serial.println(")");
+      } else {
+        Serial.print("[CustomMode] WARNING: Invalid next buffer index ");
+        Serial.print(nextBufferIndex);
+        Serial.print(", totalBuffers: ");
+        Serial.println(totalBuffers);
+      }
     }
 
     unsigned long currentTime = millis();
@@ -529,10 +618,10 @@ void loopCustomMode() {
             Serial.print("[CustomMode] Now playing buffer index ");
             Serial.println(currentBufferIndex);
           } else {
-            Serial.println("[CustomMode] No next buffer available, retrying current buffer");
-            // Don't increment buffer index - we need to retry fetching the next buffer
-            // currentBufferIndex stays the same so we request the correct buffer next time
-            bufferFetchPending = false;  // Allow retry on next opportunity
+            Serial.println("[CustomMode] No next buffer available, waiting for fetch to complete...");
+            // Don't increment buffer index - we need to wait for the fetch to complete
+            // currentBufferIndex stays the same so we'll loop the current buffer
+            // DON'T clear bufferFetchPending - the background task is still fetching!
           }
 
           // Reset timing and frame index
@@ -545,8 +634,9 @@ void loopCustomMode() {
         displayFormatFrame(0);
 
         // Update state to start from frame 1 on next iteration
+        // This will trigger the next buffer fetch immediately (at frame 1)
         if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
-          currentFormatFrameIndex = 1;  // Next frame will be 1
+          currentFormatFrameIndex = 1;  // Next frame will be 1 (will trigger prefetch)
           lastFormatFrameUpdate = millis();  // Reset timing for proper framerate
           xSemaphoreGive(stateMutex);
         }
@@ -568,23 +658,32 @@ void bufferFetchTask(void *parameter) {
   while (true) {
     // Check if there's a buffer to fetch
     int indexToFetch = -1;
-    if (xSemaphoreTake(stateMutex, 10 / portTICK_PERIOD_MS) == pdTRUE) {
+    bool shouldFetch = false;
+
+    if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
       if (bufferFetchPending && bufferToFetch >= 0) {
         indexToFetch = bufferToFetch;
-        bufferToFetch = -1;  // Clear request
+        shouldFetch = true;
+        // Don't clear bufferToFetch yet - will be cleared by requestBufferByIndex
       }
       xSemaphoreGive(stateMutex);
     }
 
     // Fetch the buffer if needed (outside of mutex)
-    if (indexToFetch >= 0 && WiFi.status() == WL_CONNECTED) {
+    if (shouldFetch && WiFi.status() == WL_CONNECTED) {
       Serial.print("[Buffer Fetch Task] Fetching buffer index ");
       Serial.println(indexToFetch);
       requestBufferByIndex(indexToFetch);
+
+      // Clear the request after fetch completes (success or failure)
+      if (xSemaphoreTake(stateMutex, portMAX_DELAY) == pdTRUE) {
+        bufferToFetch = -1;
+        xSemaphoreGive(stateMutex);
+      }
     }
 
     // Check frequently for new fetch requests
-    vTaskDelay(50 / portTICK_PERIOD_MS);
+    vTaskDelay(20 / portTICK_PERIOD_MS);  // Reduced delay for faster response
   }
 }
 
