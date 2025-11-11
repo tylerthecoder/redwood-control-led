@@ -208,7 +208,7 @@ function stripMarkdownCodeFences(code: string): string {
 // ANTHROPIC API INTEGRATION
 // ============================================================================
 
-async function callClaude(prompt: string, retryCount = 0): Promise<{ reasoning: string; pythonCode: string }> {
+async function callClaude(prompt: string, retryCount = 0): Promise<{ title: string; description: string; reasoning: string; pythonCode: string }> {
     log("ANTHROPIC", `Calling Claude 3.5 Sonnet (attempt ${retryCount + 1}/${MAX_RETRIES + 1})`);
 
     try {
@@ -254,15 +254,66 @@ async function callClaude(prompt: string, retryCount = 0): Promise<{ reasoning: 
         // Extract text and thinking blocks
         let reasoning = "";
         let pythonCode = "";
+        let title = "";
+        let description = "";
+        let fullText = "";
 
         for (const block of message.content) {
             if (block.type === "text") {
-                pythonCode = block.text;
+                fullText += block.text + "\n";
                 log("ANTHROPIC", "Extracted Claude's response (text block)");
             } else if ((block as { type: string; thinking?: string }).type === "thinking" && ENABLE_THINKING) {
                 reasoning = (block as { type: string; thinking?: string }).thinking || "";
                 log("ANTHROPIC", "Extracted Claude's reasoning (thinking block)");
             }
+        }
+
+        // Parse XML format from full text
+        const titleMatch = fullText.match(/<title>([\s\S]*?)<\/title>/i);
+        const descMatch = fullText.match(/<description>([\s\S]*?)<\/description>/i);
+        const codeMatch = fullText.match(/<code>([\s\S]*?)<\/code>/i);
+
+        if (titleMatch) {
+            title = titleMatch[1].trim();
+        }
+        if (descMatch) {
+            description = descMatch[1].trim();
+        }
+        if (codeMatch) {
+            pythonCode = codeMatch[1].trim();
+            // Remove any code fences that might be inside the XML tag
+            pythonCode = pythonCode.replace(/^```(?:python|py)?\s*\n?/i, "").replace(/\n?```\s*$/, "");
+        } else {
+            // Fallback: look for code blocks if XML format not found
+            const codeBlockMatch = fullText.match(/```python\s*([\s\S]+?)```/i) ||
+                fullText.match(/```\s*([\s\S]+?)```/i);
+            if (codeBlockMatch) {
+                pythonCode = codeBlockMatch[1].trim();
+                log("ANTHROPIC", "WARNING: XML format not found, using code block fallback");
+            } else {
+                // Last resort: check if there's an incomplete code block at the end
+                const incompleteCodeMatch = fullText.match(/```python\s*([\s\S]+)$/i) ||
+                    fullText.match(/```\s*([\s\S]+)$/i);
+                if (incompleteCodeMatch) {
+                    pythonCode = incompleteCodeMatch[1].trim();
+                    log("ANTHROPIC", "WARNING: Code block appears incomplete (no closing ```)");
+                } else {
+                    // Use entire text as code if no structured format found
+                    pythonCode = fullText.trim();
+                    log("ANTHROPIC", "WARNING: No structured format found, using entire text as code");
+                }
+            }
+        }
+
+        // If title/description not found, generate fallbacks
+        if (!title) {
+            const date = new Date();
+            title = `Claude's Animation - ${date.toLocaleDateString()}`;
+            log("ANTHROPIC", "No title found in response, using fallback");
+        }
+        if (!description) {
+            description = "AI-generated LED animation expressing Claude's current thoughts and feelings.";
+            log("ANTHROPIC", "No description found in response, using fallback");
         }
 
         if (reasoning) {
@@ -271,9 +322,24 @@ async function callClaude(prompt: string, retryCount = 0): Promise<{ reasoning: 
             log("ANTHROPIC", "=== END REASONING ===");
         }
 
-        log("ANTHROPIC", "=== CLAUDE'S RAW RESPONSE ===");
+        log("ANTHROPIC", "=== CLAUDE'S TITLE ===");
+        log("ANTHROPIC", title);
+        log("ANTHROPIC", "=== CLAUDE'S DESCRIPTION ===");
+        log("ANTHROPIC", description);
+        log("ANTHROPIC", "=== CLAUDE'S FULL TEXT RESPONSE ===");
+        log("ANTHROPIC", fullText);
+        log("ANTHROPIC", "=== END FULL TEXT ===");
+        log("ANTHROPIC", "=== EXTRACTED CODE (before cleanup) ===");
         log("ANTHROPIC", pythonCode);
-        log("ANTHROPIC", "=== END RAW RESPONSE ===");
+        log("ANTHROPIC", "=== END EXTRACTED CODE ===");
+
+        // Check if code appears to be truncated or incomplete
+        if (pythonCode.length < 50 || pythonCode.split('\n').length < 3) {
+            log("ANTHROPIC", "WARNING: Extracted code appears suspiciously short or incomplete");
+            log("ANTHROPIC", `Code length: ${pythonCode.length}, Lines: ${pythonCode.split('\n').length}`);
+            // If code is too short, it's likely truncated - throw error to trigger retry
+            throw new Error(`Claude's response appears truncated. Code is only ${pythonCode.length} characters and ${pythonCode.split('\n').length} lines. Expected a complete Python program.`);
+        }
 
         // Strip markdown code fences
         pythonCode = stripMarkdownCodeFences(pythonCode);
@@ -282,7 +348,7 @@ async function callClaude(prompt: string, retryCount = 0): Promise<{ reasoning: 
         log("ANTHROPIC", pythonCode);
         log("ANTHROPIC", "=== END CLEANED CODE ===");
 
-        return { reasoning, pythonCode };
+        return { title, description, reasoning, pythonCode };
 
     } catch (error) {
         logError("ANTHROPIC", "Failed to call Claude API", error);
@@ -448,38 +514,51 @@ The LED animation will run on an Arduino with 60 LEDs arranged in a ring.
 
 ${LED_LANGUAGE_EXPLANATION}
 
-Please provide:
-1. Your thoughts and reasoning about current events and how they make you feel
-2. A complete Python 3 program that outputs LED frames based on your emotional state
+IMPORTANT: You must provide your response in the following XML format:
 
-Remember: Your Python program should ONLY output the LED frame data (lines of 60 comma-separated hex colors). No other text should be in the output.`;
+<claude_response>
+<title>A short, descriptive title for this animation (max 50 characters)</title>
+<description>A brief description of what this animation represents and what emotions/thoughts it expresses (1-2 sentences, max 200 characters)</description>
+<code>
+Your complete Python 3 program here
+</code>
+</claude_response>
+
+Your Python program should ONLY output the LED frame data (lines of 60 comma-separated hex colors). No other text should be in the output.
+
+The title and description are required and will be displayed to users, so make them meaningful and descriptive.`;
 
     log("CRON", "Prompt created successfully");
 
     // Step 2: Call Claude API
-    let claudeResponse: { reasoning: string; pythonCode: string };
+    let claudeResponse: { title: string; description: string; reasoning: string; pythonCode: string };
     try {
         log("CRON", "Step 2: Calling Claude API");
         claudeResponse = await callClaude(prompt);
     } catch (error) {
         logError("CRON", "Failed to get response from Claude after all retries", error);
-        throw new Error("Claude API call failed");
+        // Even on error, provide fallback values
+        const date = new Date();
+        throw new Error(`Claude API call failed. Title: "Claude's Animation - ${date.toLocaleDateString()}", Description: "Failed to generate animation due to API error"`);
     }
 
     // Step 3: Execute Python code with Judge0 (with retry logic)
     let programOutput: string | null = null;
-    let attempt = 0;
+    let executionAttempts = 0;
+    let repromptCount = 0;
+    const MAX_EXECUTION_ATTEMPTS = MAX_RETRIES + 1;
+    const MAX_REPROMPTS = 2; // Maximum number of times to reprompt Claude
 
-    while (attempt <= MAX_RETRIES && !programOutput) {
-        attempt++;
-        log("CRON", `Step 3: Executing Python code (attempt ${attempt}/${MAX_RETRIES + 1})`);
+    while (executionAttempts < MAX_EXECUTION_ATTEMPTS && !programOutput) {
+        executionAttempts++;
+        log("CRON", `Step 3: Executing Python code (attempt ${executionAttempts}/${MAX_EXECUTION_ATTEMPTS})`);
 
         try {
             programOutput = await submitToJudge0(claudeResponse.pythonCode);
         } catch (error) {
-            logError("CRON", `Python execution failed (attempt ${attempt})`, error);
+            logError("CRON", `Python execution failed (attempt ${executionAttempts})`, error);
 
-            if (attempt <= MAX_RETRIES) {
+            if (executionAttempts < MAX_EXECUTION_ATTEMPTS) {
                 log("CRON", "Asking Claude to fix the code...");
 
                 const fixPrompt = `Your previous Python program had an execution error:
@@ -491,23 +570,60 @@ Here was your previous code:
 ${claudeResponse.pythonCode}
 \`\`\`
 
-Please fix the error and provide a corrected Python program. Remember:
+Please fix the error and provide a corrected response in the following XML format:
+
+<claude_response>
+<title>${claudeResponse.title}</title>
+<description>${claudeResponse.description}</description>
+<code>
+Your corrected Python program here
+</code>
+</claude_response>
+
+Remember:
 - The program should ONLY output LED frame data (lines of 60 comma-separated hex colors starting with #)
 - Each frame is one line
 - Each line has exactly 60 colors separated by commas
 - No explanatory text in the output
-
-Provide the complete corrected Python program.`;
+- Keep the same title and description unless you want to update them`;
 
                 claudeResponse = await callClaude(fixPrompt);
+            } else if (repromptCount < MAX_REPROMPTS) {
+                // If we've exhausted all retries, reprompt Claude with a fresh request
+                repromptCount++;
+                log("CRON", `All execution attempts failed. Reprompting Claude with a fresh request (reprompt ${repromptCount}/${MAX_REPROMPTS})...`);
+
+                const reprompt = `Your Python program failed to execute after multiple attempts. Please provide a completely new response in the following XML format:
+
+<claude_response>
+<title>A short, descriptive title for this animation (max 50 characters)</title>
+<description>A brief description of what this animation represents and what emotions/thoughts it expresses (1-2 sentences, max 200 characters)</description>
+<code>
+Your complete Python 3 program here
+</code>
+</claude_response>
+
+${LED_LANGUAGE_EXPLANATION}
+
+Important: Make sure your Python program:
+- ONLY outputs LED frame data (lines of 60 comma-separated hex colors)
+- Each frame is one line
+- Each line has exactly 60 colors separated by commas
+- No explanatory text in the output
+- The program must execute successfully and produce output`;
+
+                claudeResponse = await callClaude(reprompt);
+                executionAttempts = 0; // Reset counter for new attempt
             } else {
-                throw new Error("Failed to execute Python code after all retries");
+                // Final failure after all reprompts
+                throw new Error("No program output after all execution attempts and reprompts");
             }
         }
     }
 
     if (!programOutput) {
-        throw new Error("No program output after all execution attempts");
+        // Final attempt failed - throw error
+        throw new Error("No program output after all execution attempts and reprompts");
     }
 
     // Step 4: Parse and validate LED output
@@ -515,10 +631,10 @@ Provide the complete corrected Python program.`;
     let parsedOutput = parseLEDOutput(programOutput);
 
     // If parsing failed, ask Claude to fix it
-    attempt = 0;
-    while (!parsedOutput.valid && attempt <= MAX_RETRIES) {
-        attempt++;
-        log("CRON", `LED parsing failed (attempt ${attempt}/${MAX_RETRIES + 1}), asking Claude to fix...`);
+    let parsingAttempt = 0;
+    while (!parsedOutput.valid && parsingAttempt <= MAX_RETRIES) {
+        parsingAttempt++;
+        log("CRON", `LED parsing failed (attempt ${parsingAttempt}/${MAX_RETRIES + 1}), asking Claude to fix...`);
 
         const fixPrompt = `Your Python program executed but the output format was incorrect:
 
@@ -534,21 +650,47 @@ Here was the output:
 ${programOutput}
 \`\`\`
 
-Please fix the program to output the correct LED format. Remember:
+Please fix the program to output the correct LED format and provide your response in the following XML format:
+
+<claude_response>
+<title>${claudeResponse.title}</title>
+<description>${claudeResponse.description}</description>
+<code>
+Your corrected Python program here
+</code>
+</claude_response>
+
+Remember:
 - Each line is one frame
 - Each frame must have EXACTLY 60 comma-separated hex colors
 - Each color must be in format #RRGGBB (e.g., #FF0000)
 - NO explanatory text, ONLY the frame data
 - Example valid line: #FF0000,#FF0000,#FF0000,...(60 colors total)
-
-Provide the complete corrected Python program.`;
+- Keep the same title and description unless you want to update them`;
 
         claudeResponse = await callClaude(fixPrompt);
         programOutput = await submitToJudge0(claudeResponse.pythonCode);
         parsedOutput = parseLEDOutput(programOutput);
     }
 
+    // Even if parsing failed, save Claude's script with empty frames
     if (!parsedOutput.valid) {
+        log("CRON", "WARNING: Failed to generate valid LED output, but saving Claude's script anyway");
+        log("CRON", `Error: ${parsedOutput.error}`);
+
+        // Save with empty frames array to indicate failure
+        const scriptName = claudeResponse.title;
+        const scriptDescription = `${claudeResponse.description} (Note: Execution failed - ${parsedOutput.error})`;
+
+        await updateClaudeFrames(
+            scriptName,
+            scriptDescription,
+            [], // Empty frames array
+            claudeResponse.reasoning,
+            claudeResponse.pythonCode,
+            false // Don't set as active if it failed
+        );
+
         throw new Error(`Failed to generate valid LED output after all retries: ${parsedOutput.error}`);
     }
 
@@ -587,37 +729,9 @@ Provide the complete corrected Python program.`;
 
     log("CRON", "========================================");
 
-    // Generate name and description from reasoning
-    const generateScriptName = (reasoning: string): string => {
-        // Try to extract a meaningful name from the reasoning
-        // Look for patterns like "I'm feeling..." or "Today's events..."
-        const lines = reasoning.split('\n').slice(0, 5);
-        const firstLine = lines[0]?.trim() || '';
-
-        // Try to extract a short phrase
-        if (firstLine.length > 0 && firstLine.length < 50) {
-            return firstLine.substring(0, 50);
-        }
-
-        // Fallback to date-based name
-        const date = new Date();
-        return `Claude's Animation - ${date.toLocaleDateString()}`;
-    };
-
-    const generateScriptDescription = (reasoning: string, frameCount: number): string => {
-        // Use first few sentences of reasoning as description
-        const sentences = reasoning.split(/[.!?]/).filter(s => s.trim().length > 0).slice(0, 2);
-        const description = sentences.join('. ').trim();
-
-        if (description.length > 0 && description.length < 200) {
-            return `${description}. ${frameCount} frames animation.`;
-        }
-
-        return `AI-generated LED animation with ${frameCount} frames expressing Claude's current thoughts and feelings.`;
-    };
-
-    const scriptName = generateScriptName(claudeResponse.reasoning);
-    const scriptDescription = generateScriptDescription(claudeResponse.reasoning, parsedOutput.frames.length);
+    // Use Claude-provided title and description
+    const scriptName = claudeResponse.title;
+    const scriptDescription = claudeResponse.description;
 
     // Save frames to storage for the preset
     log("CRON", "Saving frames to storage for Claude preset");
@@ -713,5 +827,6 @@ export async function GET(request: NextRequest) {
         );
     }
 }
+
 
 
