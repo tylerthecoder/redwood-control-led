@@ -1,25 +1,24 @@
 import { NextResponse } from "next/server";
-import { getClaudeFrames } from "./state";
+import { getAllClaudeFrames, getActiveClaudeFrames } from "./state";
 
 export async function GET() {
-    const state = await getClaudeFrames();
+    try {
+        const scripts = await getAllClaudeFrames();
+        const active = await getActiveClaudeFrames();
 
-    if (!state) {
+        return NextResponse.json({
+            scripts,
+            activeId: active?.id || null,
+        });
+    } catch (error) {
+        console.error("Error fetching Claude frames:", error);
         return NextResponse.json(
             {
-                error: "No Claude-generated frames available yet",
-                message: "The cron job hasn't generated any animations yet. Wait for it to run or trigger it manually."
+                error: "Failed to fetch Claude scripts",
+                message: error instanceof Error ? error.message : String(error),
             },
-            { status: 404 }
+            { status: 500 }
         );
     }
-
-    return NextResponse.json({
-        frames: state.frames,
-        reasoning: state.reasoning,
-        pythonCode: state.pythonCode,
-        timestamp: state.timestamp,
-        frameCount: state.frameCount,
-    });
 }
 

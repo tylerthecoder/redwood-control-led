@@ -1,9 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { scriptPresets, type ScriptPreset } from "../examples";
 import { useLEDState } from "../hooks/use-led-state";
 import LEDPreviewModal from "../components/led-preview-modal";
+import type { ClaudeFrameData } from "../lib/state";
 
 export default function ScriptsPage() {
     const { loading, updateState, error } = useLEDState();
@@ -11,10 +12,35 @@ export default function ScriptsPage() {
     const [framerate, setFramerate] = useState(60);
     const [formatError, setFormatError] = useState<string | null>(null);
     const [selectedPreset, setSelectedPreset] = useState<ScriptPreset | null>(null);
+    const [selectedClaudeScript, setSelectedClaudeScript] = useState<ClaudeFrameData | null>(null);
+    const [claudeScripts, setClaudeScripts] = useState<ClaudeFrameData[]>([]);
+    const [activeClaudeId, setActiveClaudeId] = useState<number | null>(null);
+    const [loadingScripts, setLoadingScripts] = useState(true);
     const [showPreview, setShowPreview] = useState(false);
     const [claudeReasoning, setClaudeReasoning] = useState<string>("");
     const [claudePythonCode, setClaudePythonCode] = useState<string>("");
     const [claudeTimestamp, setClaudeTimestamp] = useState<string>("");
+
+    // Fetch Claude scripts on mount
+    useEffect(() => {
+        const fetchClaudeScripts = async () => {
+            try {
+                setLoadingScripts(true);
+                const response = await fetch("/api/claude-frames");
+                if (response.ok) {
+                    const data = await response.json();
+                    setClaudeScripts(data.scripts || []);
+                    setActiveClaudeId(data.activeId || null);
+                }
+            } catch (error) {
+                console.error("Failed to fetch Claude scripts:", error);
+            } finally {
+                setLoadingScripts(false);
+            }
+        };
+
+        fetchClaudeScripts();
+    }, []);
 
     const getFrames = () => {
         return formatText
@@ -54,39 +80,54 @@ export default function ScriptsPage() {
     const loadPreset = async (preset: ScriptPreset) => {
         try {
             setFormatError(null);
+            setSelectedClaudeScript(null);
 
-            // Check if this is the Claude preset by name
-            if (preset.name === "Claude's Feelings") {
-                // Fetch Claude data including reasoning
-                const response = await fetch("/api/claude-frames");
-                if (response.ok) {
-                    const data = await response.json();
-                    setClaudeReasoning(data.reasoning || "");
-                    setClaudePythonCode(data.pythonCode || "");
-                    setClaudeTimestamp(data.timestamp || "");
-                    setFormatText(data.frames.join("\n"));
-                } else {
-                    setClaudeReasoning("");
-                    setClaudePythonCode("");
-                    setClaudeTimestamp("");
-                    const frames = await preset.generate();
-                    setFormatText(frames.join("\n"));
-                }
-            } else {
-                // Clear Claude data for non-Claude presets
-                setClaudeReasoning("");
-                setClaudePythonCode("");
-                setClaudeTimestamp("");
-                const frames = await preset.generate();
-                setFormatText(frames.join("\n"));
-            }
-
+            // Clear Claude data for non-Claude presets
+            setClaudeReasoning("");
+            setClaudePythonCode("");
+            setClaudeTimestamp("");
+            const frames = await preset.generate();
+            setFormatText(frames.join("\n"));
             setFramerate(preset.framerate);
             setSelectedPreset(preset);
         } catch (error) {
             setFormatError(error instanceof Error ? error.message : "Failed to load preset");
         }
     };
+
+    const loadClaudeScript = async (script: ClaudeFrameData) => {
+        try {
+            setFormatError(null);
+            setSelectedPreset(null);
+            setSelectedClaudeScript(script);
+            setFormatText(script.frames.join("\n"));
+            setClaudeReasoning(script.reasoning);
+            setClaudePythonCode(script.pythonCode);
+            setClaudeTimestamp(script.timestamp);
+        } catch (error) {
+            setFormatError(error instanceof Error ? error.message : "Failed to load script");
+        }
+    };
+
+    const setActiveScript = async (id: number) => {
+        try {
+            const response = await fetch(`/api/claude-frames/${id}/activate`, {
+                method: "POST",
+            });
+            if (response.ok) {
+                setActiveClaudeId(id);
+                // Refresh scripts to update active status
+                const scriptsResponse = await fetch("/api/claude-frames");
+                if (scriptsResponse.ok) {
+                    const data = await scriptsResponse.json();
+                    setClaudeScripts(data.scripts || []);
+                }
+            }
+        } catch (error) {
+            console.error("Failed to set active script:", error);
+        }
+    };
+
 
     return (
         <div className="flex min-h-screen flex-col bg-zinc-50 font-sans dark:bg-black">
@@ -97,7 +138,7 @@ export default function ScriptsPage() {
                         Presets
                     </h2>
                     <div className="flex flex-col gap-3 pb-4">
-                        {scriptPresets.map((preset, index) => (
+                        {scriptPresets.filter(p => p.name !== "Claude's Feelings").map((preset, index) => (
                             <div
                                 key={index}
                                 className={`p-4 rounded border border-solid transition-colors cursor-pointer ${selectedPreset === preset
@@ -118,6 +159,68 @@ export default function ScriptsPage() {
                             </div>
                         ))}
                     </div>
+
+                    <h2 className="text-xl font-semibold text-black dark:text-zinc-50 mb-2 mt-4 sticky top-0 bg-zinc-50 dark:bg-black py-2 z-10">
+                        Claude Scripts
+                    </h2>
+                    {loadingScripts ? (
+                        <div className="text-sm text-zinc-600 dark:text-zinc-400">Loading scripts...</div>
+                    ) : claudeScripts.length === 0 ? (
+                        <div className="text-sm text-zinc-600 dark:text-zinc-400">No Claude scripts yet. Wait for the cron job to generate one.</div>
+                    ) : (
+                        <div className="flex flex-col gap-3 pb-4">
+                            {claudeScripts.map((script) => (
+                                <div
+                                    key={script.id}
+                                    className={`p-4 rounded border border-solid transition-colors ${
+                                        selectedClaudeScript?.id === script.id
+                                            ? "border-blue-500 bg-blue-50 dark:bg-blue-950"
+                                            : script.isActive
+                                            ? "border-green-500 bg-green-50 dark:bg-green-950"
+                                            : "border-black/[.08] dark:border-white/[.145] hover:bg-black/[.04] dark:hover:bg-[#1a1a1a]"
+                                    }`}
+                                >
+                                    <div className="flex items-start justify-between gap-2">
+                                        <div
+                                            className="flex-1 cursor-pointer"
+                                            onClick={() => loadClaudeScript(script)}
+                                        >
+                                            <div className="flex items-center gap-2">
+                                                <h3 className="font-semibold text-black dark:text-zinc-50">
+                                                    {script.name}
+                                                </h3>
+                                                {script.isActive && (
+                                                    <span className="text-xs px-2 py-0.5 rounded bg-green-500 text-white">
+                                                        Active
+                                                    </span>
+                                                )}
+                                            </div>
+                                            <p className="text-xs text-zinc-500 dark:text-zinc-500 mt-1">
+                                                {new Date(script.timestamp).toLocaleDateString()}
+                                            </p>
+                                            <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-2">
+                                                {script.description}
+                                            </p>
+                                            <p className="text-xs text-zinc-500 dark:text-zinc-500 mt-1">
+                                                {script.frameCount} frames
+                                            </p>
+                                        </div>
+                                        {!script.isActive && (
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    setActiveScript(script.id);
+                                                }}
+                                                className="text-xs px-2 py-1 rounded bg-zinc-200 dark:bg-zinc-800 text-black dark:text-zinc-50 hover:bg-zinc-300 dark:hover:bg-zinc-700"
+                                            >
+                                                Set Active
+                                            </button>
+                                        )}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    )}
                 </aside>
 
                 {/* Main content */}
@@ -129,7 +232,7 @@ export default function ScriptsPage() {
                                 Presets
                             </h2>
                             <div className="flex flex-col gap-3">
-                                {scriptPresets.map((preset, index) => (
+                                {scriptPresets.filter(p => p.name !== "Claude's Feelings").map((preset, index) => (
                                     <div
                                         key={index}
                                         className={`p-4 rounded border border-solid transition-colors cursor-pointer ${selectedPreset === preset
@@ -150,11 +253,56 @@ export default function ScriptsPage() {
                                     </div>
                                 ))}
                             </div>
+                            <h2 className="text-xl font-semibold text-black dark:text-zinc-50 mt-4 sticky top-0 bg-white dark:bg-black py-2 z-10">
+                                Claude Scripts
+                            </h2>
+                            {loadingScripts ? (
+                                <div className="text-sm text-zinc-600 dark:text-zinc-400">Loading scripts...</div>
+                            ) : claudeScripts.length === 0 ? (
+                                <div className="text-sm text-zinc-600 dark:text-zinc-400">No Claude scripts yet.</div>
+                            ) : (
+                                <div className="flex flex-col gap-3">
+                                    {claudeScripts.map((script) => (
+                                        <div
+                                            key={script.id}
+                                            className={`p-4 rounded border border-solid transition-colors ${
+                                                selectedClaudeScript?.id === script.id
+                                                    ? "border-blue-500 bg-blue-50 dark:bg-blue-950"
+                                                    : script.isActive
+                                                    ? "border-green-500 bg-green-50 dark:bg-green-950"
+                                                    : "border-black/[.08] dark:border-white/[.145]"
+                                            }`}
+                                            onClick={() => loadClaudeScript(script)}
+                                        >
+                                            <div className="flex items-start justify-between gap-2">
+                                                <div className="flex-1">
+                                                    <div className="flex items-center gap-2">
+                                                        <h3 className="font-semibold text-black dark:text-zinc-50">
+                                                            {script.name}
+                                                        </h3>
+                                                        {script.isActive && (
+                                                            <span className="text-xs px-2 py-0.5 rounded bg-green-500 text-white">
+                                                                Active
+                                                            </span>
+                                                        )}
+                                                    </div>
+                                                    <p className="text-xs text-zinc-500 dark:text-zinc-500 mt-1">
+                                                        {new Date(script.timestamp).toLocaleDateString()}
+                                                    </p>
+                                                    <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-2">
+                                                        {script.description}
+                                                    </p>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            )}
                         </div>
                     </div>
 
-                    {/* Claude's Reasoning Section - only visible for Claude preset */}
-                    {claudeReasoning && (
+                    {/* Claude's Reasoning Section - only visible for Claude scripts */}
+                    {selectedClaudeScript && claudeReasoning && (
                         <div className="flex flex-col gap-4 w-full max-w-2xl">
                             <h2 className="text-2xl font-semibold text-black dark:text-zinc-50">
                                 Claude's Thoughts

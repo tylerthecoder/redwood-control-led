@@ -1,6 +1,13 @@
 // Store layer - Read/write operations for application state
 import { saveLEDState as saveToStorage, getLEDState as getFromStorage } from "./storage";
-import { saveClaudeFrames as saveClaudeToStorage, getClaudeFrames as getClaudeFromStorage } from "./storage";
+import {
+    saveClaudeFrames as saveClaudeToStorage,
+    getClaudeFrames as getClaudeFromStorage,
+    getAllClaudeFrames as getAllClaudeFromStorage,
+    getClaudeFramesById as getClaudeByIdFromStorage,
+    getActiveClaudeFrames as getActiveClaudeFromStorage,
+    setActiveClaudeFrames as setActiveClaudeInStorage,
+} from "./storage";
 import type { LedState, ClaudeFrameData, SimpleMode, LoopMode, ScriptMode } from "./state";
 
 // ============================================================================
@@ -68,14 +75,33 @@ export async function getLEDState(): Promise<LedState> {
 // ============================================================================
 
 export async function saveClaudeFrames(
+    name: string,
+    description: string,
     frames: string[],
     reasoning: string,
-    pythonCode: string
-): Promise<void> {
-    await saveClaudeToStorage(frames, reasoning, pythonCode);
+    pythonCode: string,
+    setAsActive: boolean = false
+): Promise<number> {
+    return await saveClaudeToStorage(name, description, frames, reasoning, pythonCode, setAsActive);
 }
 
 export async function getClaudeFrames(): Promise<ClaudeFrameData | null> {
     return await getClaudeFromStorage();
+}
+
+export async function getAllClaudeFrames(): Promise<ClaudeFrameData[]> {
+    return await getAllClaudeFromStorage();
+}
+
+export async function getClaudeFramesById(id: number): Promise<ClaudeFrameData | null> {
+    return await getClaudeByIdFromStorage(id);
+}
+
+export async function getActiveClaudeFrames(): Promise<ClaudeFrameData | null> {
+    return await getActiveClaudeFromStorage();
+}
+
+export async function setActiveClaudeFrames(id: number): Promise<void> {
+    return await setActiveClaudeInStorage(id);
 }
 

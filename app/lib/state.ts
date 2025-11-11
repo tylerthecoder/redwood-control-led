@@ -30,11 +30,15 @@ export type LedState = SimpleMode | LoopMode | ScriptMode;
 // ============================================================================
 
 export interface ClaudeFrameData {
+    id: number;
+    name: string;
+    description: string;
     frames: string[];
     reasoning: string;
     pythonCode: string;
     timestamp: string;
     frameCount: number;
+    isActive: boolean;
 }
 
 // ============================================================================

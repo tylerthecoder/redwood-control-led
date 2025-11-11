@@ -587,12 +587,49 @@ Provide the complete corrected Python program.`;
 
     log("CRON", "========================================");
 
+    // Generate name and description from reasoning
+    const generateScriptName = (reasoning: string): string => {
+        // Try to extract a meaningful name from the reasoning
+        // Look for patterns like "I'm feeling..." or "Today's events..."
+        const lines = reasoning.split('\n').slice(0, 5);
+        const firstLine = lines[0]?.trim() || '';
+
+        // Try to extract a short phrase
+        if (firstLine.length > 0 && firstLine.length < 50) {
+            return firstLine.substring(0, 50);
+        }
+
+        // Fallback to date-based name
+        const date = new Date();
+        return `Claude's Animation - ${date.toLocaleDateString()}`;
+    };
+
+    const generateScriptDescription = (reasoning: string, frameCount: number): string => {
+        // Use first few sentences of reasoning as description
+        const sentences = reasoning.split(/[.!?]/).filter(s => s.trim().length > 0).slice(0, 2);
+        const description = sentences.join('. ').trim();
+
+        if (description.length > 0 && description.length < 200) {
+            return `${description}. ${frameCount} frames animation.`;
+        }
+
+        return `AI-generated LED animation with ${frameCount} frames expressing Claude's current thoughts and feelings.`;
+    };
+
+    const scriptName = generateScriptName(claudeResponse.reasoning);
+    const scriptDescription = generateScriptDescription(claudeResponse.reasoning, parsedOutput.frames.length);
+
     // Save frames to storage for the preset
     log("CRON", "Saving frames to storage for Claude preset");
+    log("CRON", `Script name: ${scriptName}`);
+    log("CRON", `Script description: ${scriptDescription}`);
     await updateClaudeFrames(
+        scriptName,
+        scriptDescription,
         parsedOutput.frames,
         claudeResponse.reasoning,
-        claudeResponse.pythonCode
+        claudeResponse.pythonCode,
+        true // Set as active by default
     );
     log("CRON", "Frames saved successfully");
 
