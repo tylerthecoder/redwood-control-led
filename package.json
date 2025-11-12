@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "build:arduino": "bun run scripts/build-arduino.ts"
+    "build:arduino": "bun run scripts/build-arduino.ts",
+    "seed": "bun run scripts/seed.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.36.3",

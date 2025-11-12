@@ -1,46 +1,12 @@
 "use client";
 
-import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { setSimpleMode, setLoopMode, setScriptMode, setClaudeMode } from "../lib/actions";
 
-type Mode = "simple" | "loop" | "script";
-
-interface SimpleMode {
-    mode: "simple";
-    on: boolean;
-    color: string;
-}
-
-interface LoopMode {
-    mode: "loop";
-    colors: string[];
-    delay: number;
-}
-
-interface ScriptMode {
-    mode: "script";
-    frames?: string[];
-    framerate: number;
-}
-
-type LedState = SimpleMode | LoopMode | ScriptMode;
-
-async function fetchLEDState(): Promise<LedState> {
+async function fetchLEDState() {
     const response = await fetch("/api/control");
     if (!response.ok) {
         throw new Error("Failed to fetch LED state");
-    }
-    return response.json();
-}
-
-async function updateLEDState(state: Partial<LedState>): Promise<LedState> {
-    const response = await fetch("/api/control", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(state),
-    });
-    if (!response.ok) {
-        const error = await response.json();
-        throw new Error(error.error || "Failed to update LED state");
     }
     return response.json();
 }
@@ -53,47 +19,32 @@ export function useLEDState() {
         queryFn: fetchLEDState,
     });
 
-    const mutation = useMutation({
-        mutationFn: updateLEDState,
-        onMutate: async (newState) => {
-            // Cancel outgoing refetches
-            await queryClient.cancelQueries({ queryKey: ["ledState"] });
-
-            // Snapshot previous value
-            const previousState = queryClient.getQueryData<LedState>(["ledState"]);
-
-            // Optimistically update
-            if (previousState) {
-                queryClient.setQueryData<LedState>(["ledState"], {
-                    ...previousState,
-                    ...newState,
-                } as LedState);
-            }
-
-            return { previousState };
-        },
-        onError: (err, newState, context) => {
-            // Rollback on error
-            if (context?.previousState) {
-                queryClient.setQueryData(["ledState"], context.previousState);
-            }
-            console.error("Error updating LED state:", err);
-        },
-        onSettled: () => {
-            // Refetch after mutation
-            queryClient.invalidateQueries({ queryKey: ["ledState"] });
-        },
-    });
-
-    const updateState = (updates: Partial<LedState>) => {
-        mutation.mutate(updates);
+    const updateState = async (updates: any) => {
+        // Refetch after mutation
+        await queryClient.invalidateQueries({ queryKey: ["ledState"] });
     };
 
     return {
-        loading: isLoading || mutation.isPending,
+        loading: isLoading,
         state: state,
         updateState,
-        error: mutation.error,
+        // Convenience functions for mode changes
+        setSimpleMode: async (options?: { on?: boolean; color?: string }) => {
+            await setSimpleMode(options);
+            await queryClient.invalidateQueries({ queryKey: ["ledState"] });
+        },
+        setLoopMode: async (options?: { colors?: string[]; delay?: number }) => {
+            await setLoopMode(options);
+            await queryClient.invalidateQueries({ queryKey: ["ledState"] });
+        },
+        setScriptMode: async (options?: { framerate?: number; frames?: string[] }) => {
+            await setScriptMode(options);
+            await queryClient.invalidateQueries({ queryKey: ["ledState"] });
+        },
+        setClaudeMode: async () => {
+            await setClaudeMode();
+            await queryClient.invalidateQueries({ queryKey: ["ledState"] });
+        },
     };
 }
 

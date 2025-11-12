@@ -1,6 +1,6 @@
 "use client";
 
-import { CurrentModeDisplay, Navigation } from "./navigation";
+import { Header } from "./navigation";
 import { QueryProvider } from "./query-provider";
 
 export default function LayoutClient({
@@ -10,8 +10,7 @@ export default function LayoutClient({
 }) {
   return (
     <QueryProvider>
-      <CurrentModeDisplay />
-      <Navigation />
+      <Header />
       {children}
     </QueryProvider>
   );

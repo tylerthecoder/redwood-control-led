@@ -343,40 +343,10 @@ export const simplePresets: SimplePreset[] = [
 ];
 
 // ============================================================================
-// CLAUDE AI GENERATED PRESET
-// ============================================================================
-
-export const claudeAIPreset: ScriptPreset = {
-    name: "Claude's Feelings",
-    description: "AI-generated animation expressing Claude's thoughts about current events (updated by cron job)",
-    category: "AI",
-    framerate: 60,
-    generate: async () => {
-        try {
-            const response = await fetch("/api/claude-frames");
-
-            if (!response.ok) {
-                console.error("Failed to fetch Claude frames:", await response.text());
-                // Return a fallback animation
-                return ["#FF0000," + "#FF0000,".repeat(59).slice(0, -1)];
-            }
-
-            const data = await response.json();
-            return data.frames;
-        } catch (error) {
-            console.error("Error fetching Claude frames:", error);
-            // Return a fallback animation
-            return ["#FF0000," + "#FF0000,".repeat(59).slice(0, -1)];
-        }
-    },
-};
-
-// ============================================================================
 // EXPORTS
 // ============================================================================
 
 export const scriptPresets: ScriptPreset[] = [
-    claudeAIPreset,
     aiPulsePreset,
     neuralNetworkPreset,
     redGreenPreset,

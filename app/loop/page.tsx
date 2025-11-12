@@ -5,7 +5,7 @@ import { loopPresets, type LoopPreset } from "../examples";
 import { useLEDState } from "../hooks/use-led-state";
 
 export default function LoopPage() {
-  const { loading, updateState } = useLEDState();
+  const { loading, setLoopMode } = useLEDState();
   const [colors, setColors] = useState<string[]>(["#FF0000", "#00FF00", "#0000FF"]);
   const [delay, setDelay] = useState(1000);
   const [selectedPreset, setSelectedPreset] = useState<LoopPreset | null>(null);
@@ -32,22 +32,20 @@ export default function LoopPage() {
     setColors(newColors);
   };
 
-  const sendToArduino = () => {
-    updateState({
-      mode: "loop",
-      colors,
-      delay,
-    });
+  const sendToArduino = async () => {
+    await setLoopMode({ colors, delay });
   };
 
   return (
-    <div className="flex min-h-screen flex-col bg-zinc-50 font-sans dark:bg-black">
-      <main className="flex flex-row max-w-7xl w-full mx-auto">
+    <div className="flex min-h-screen flex-col bg-zinc-50 font-sans dark:bg-black pb-24">
+      <main className="flex flex-row max-w-7xl w-full mx-auto flex-1">
         {/* Sidebar for larger screens */}
-        <aside className="hidden lg:flex w-80 flex-col gap-4 p-8 border-r border-zinc-200 dark:border-zinc-800 max-h-screen overflow-y-auto">
-          <h2 className="text-xl font-semibold text-black dark:text-zinc-50 mb-2 sticky top-0 bg-zinc-50 dark:bg-black py-2 z-10">
-            Presets
-          </h2>
+        <aside className="hidden lg:flex w-80 flex-col gap-4 p-8 border-r border-zinc-200 dark:border-zinc-800 max-h-[calc(100vh-6rem)] overflow-y-auto">
+          <div className="sticky top-0 bg-zinc-50 dark:bg-black py-2 z-10 border-b border-zinc-200 dark:border-zinc-800 -mx-4 px-4 mb-2">
+            <h2 className="text-xl font-semibold text-black dark:text-zinc-50">
+              Presets
+            </h2>
+          </div>
           <div className="flex flex-col gap-3 pb-4">
             {loopPresets.map((preset, index) => (
               <div
@@ -190,19 +188,24 @@ export default function LoopPage() {
                     + Add Color
                   </button>
                 </div>
-
-                <button
-                  onClick={sendToArduino}
-                  disabled={loading}
-                  className="h-12 rounded-full bg-foreground text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] disabled:opacity-50 disabled:cursor-not-allowed mt-4"
-                >
-                  {loading ? "Sending..." : "Send to Arduino"}
-                </button>
               </div>
             </div>
           </div>
         </div>
       </main>
+
+      {/* Sticky Footer */}
+      <div className="fixed bottom-0 left-0 right-0 bg-white dark:bg-black border-t border-zinc-200 dark:border-zinc-800 py-4 px-8 shadow-lg z-50">
+        <div className="max-w-7xl mx-auto flex items-center justify-end">
+          <button
+            onClick={sendToArduino}
+            disabled={loading}
+            className="px-6 py-3 rounded-full bg-foreground text-background transition-colors hover:bg-[#383838] dark:hover:bg-[#ccc] disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+          >
+            {loading ? "Sending..." : "📡 Send to Arduino"}
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

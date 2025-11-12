@@ -1,6 +1,6 @@
 // Storage abstraction layer - Uses Neon Postgres database
 import { neon } from "@neondatabase/serverless";
-import type { ClaudeFrameData, LEDStateData } from "./state";
+import type { Script } from "./model";
 
 // ============================================================================
 // CONFIGURATION
@@ -18,75 +18,56 @@ let dbInitialized = false;
 // DATABASE FUNCTIONS
 // ============================================================================
 
-async function initializeDatabase(): Promise<void> {
-    if (dbInitialized) return;
+export async function getDatabaseConnection() {
+    if (dbInitialized) {
+        return neon(DATABASE_URL!);
+    }
 
     try {
         console.log("[STORAGE:DEBUG] Initializing database connection...");
         const sql = neon(DATABASE_URL!);
 
-        // Check if table exists
-        const tableExists = await sql`
-            SELECT table_name
-            FROM information_schema.tables
-            WHERE table_name = 'claude_frames'
+        // Create unified scripts table
+        console.log("[STORAGE:DEBUG] Setting up unified scripts table");
+        await sql`
+            CREATE TABLE IF NOT EXISTS scripts (
+                id SERIAL PRIMARY KEY,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL,
+                python_code TEXT NOT NULL,
+                frames JSONB NOT NULL,
+                frame_count INTEGER NOT NULL,
+                framerate INTEGER NOT NULL DEFAULT 60,
+                created_by TEXT NOT NULL CHECK (created_by IN ('user', 'claude')),
+                reasoning TEXT,
+                is_active BOOLEAN DEFAULT FALSE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
         `;
 
-        if (tableExists.length === 0) {
-            // Create table with full schema (new installation)
-            console.log("[STORAGE:DEBUG] Creating claude_frames table with full schema");
+        // Check if framerate column exists, add it if missing
+        const framerateColumnExists = await sql`
+            SELECT column_name
+            FROM information_schema.columns
+            WHERE table_name = 'scripts' AND column_name = 'framerate'
+        `;
+
+        if (framerateColumnExists.length === 0) {
+            console.log("[STORAGE:DEBUG] Adding framerate column to scripts table");
             await sql`
-                CREATE TABLE claude_frames (
-                    id SERIAL PRIMARY KEY,
-                    name TEXT NOT NULL,
-                    description TEXT NOT NULL,
-                    frames JSONB NOT NULL,
-                    reasoning TEXT,
-                    python_code TEXT,
-                    frame_count INTEGER NOT NULL,
-                    is_active BOOLEAN DEFAULT FALSE,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-                )
+                ALTER TABLE scripts
+                ADD COLUMN framerate INTEGER NOT NULL DEFAULT 60
             `;
-        } else {
-            // Table exists - check if migration is needed
-            const nameColumnExists = await sql`
-                SELECT column_name
-                FROM information_schema.columns
-                WHERE table_name = 'claude_frames' AND column_name = 'name'
-            `;
-
-            if (nameColumnExists.length === 0) {
-                // Migrate existing table: add new columns
-                console.log("[STORAGE:DEBUG] Migrating: Adding name, description, and is_active columns");
-                await sql`
-                    ALTER TABLE claude_frames
-                    ADD COLUMN name TEXT,
-                    ADD COLUMN description TEXT,
-                    ADD COLUMN is_active BOOLEAN DEFAULT FALSE
-                `;
-
-                // Set default values for existing rows
-                await sql`
-                    UPDATE claude_frames
-                    SET name = 'Claude Animation ' || id::text,
-                        description = 'AI-generated LED animation with ' || frame_count::text || ' frames',
-                        is_active = FALSE
-                    WHERE name IS NULL
-                `;
-
-                // Make name and description NOT NULL after setting defaults
-                await sql`
-                    ALTER TABLE claude_frames
-                    ALTER COLUMN name SET NOT NULL,
-                    ALTER COLUMN description SET NOT NULL
-                `;
-            }
         }
 
         // Create index for active script lookup
         await sql`
-            CREATE INDEX IF NOT EXISTS idx_claude_frames_active ON claude_frames(is_active) WHERE is_active = TRUE
+            CREATE INDEX IF NOT EXISTS idx_scripts_active ON scripts(is_active) WHERE is_active = TRUE
+        `;
+
+        // Create index for created_by lookup
+        await sql`
+            CREATE INDEX IF NOT EXISTS idx_scripts_created_by ON scripts(created_by)
         `;
 
         await sql`
@@ -108,46 +89,54 @@ async function initializeDatabase(): Promise<void> {
 
         console.log("[STORAGE:DEBUG] ✅ Database initialized successfully");
         dbInitialized = true;
+        return sql;
     } catch (error) {
         console.error("[STORAGE:DEBUG] ❌ Failed to initialize database:", error);
         throw new Error(`Database initialization failed: ${error instanceof Error ? error.message : String(error)}`);
     }
 }
 
+async function initializeDatabase(): Promise<void> {
+    await getDatabaseConnection();
+}
+
 // ============================================================================
-// CLAUDE FRAMES STORAGE
+// UNIFIED SCRIPTS STORAGE
 // ============================================================================
 
-export async function saveClaudeFrames(
-    name: string,
+export async function saveScript(
+    title: string,
     description: string,
-    frames: string[],
-    reasoning: string,
     pythonCode: string,
-    setAsActive: boolean = false
+    frames: string[],
+    createdBy: "user" | "claude",
+    reasoning?: string,
+    setAsActive: boolean = false,
+    framerate: number = 60
 ): Promise<number> {
     const timestamp = new Date().toISOString();
     const frameCount = frames.length;
 
-    await initializeDatabase();
+    const sql = await getDatabaseConnection();
 
     try {
-        const sql = neon(DATABASE_URL!);
 
         // If setting as active, first deactivate all other scripts
         if (setAsActive) {
-            await sql`UPDATE claude_frames SET is_active = FALSE`;
+            await sql`UPDATE scripts SET is_active = FALSE`;
         }
 
         const result = await sql`
-            INSERT INTO claude_frames (name, description, frames, reasoning, python_code, frame_count, is_active, created_at)
+            INSERT INTO scripts (title, description, python_code, frames, frame_count, framerate, created_by, reasoning, is_active, created_at)
             VALUES (
-                ${name},
+                ${title},
                 ${description},
-                ${JSON.stringify(frames)}::jsonb,
-                ${reasoning},
                 ${pythonCode},
+                ${JSON.stringify(frames)}::jsonb,
                 ${frameCount},
+                ${framerate},
+                ${createdBy},
+                ${reasoning || null},
                 ${setAsActive},
                 ${timestamp}::timestamp
             )
@@ -155,206 +144,189 @@ export async function saveClaudeFrames(
         `;
 
         const scriptId = result[0].id as number;
-        console.log("[STORAGE:DEBUG] ✅ Saved Claude frames to database with ID:", scriptId);
+        console.log("[STORAGE:DEBUG] ✅ Saved script to database with ID:", scriptId);
         return scriptId;
     } catch (error) {
-        console.error("[STORAGE:DEBUG] ❌ Failed to save Claude frames to database:", error);
-        throw new Error(`Failed to save Claude frames: ${error instanceof Error ? error.message : String(error)}`);
+        console.error("[STORAGE:DEBUG] ❌ Failed to save script to database:", error);
+        throw new Error(`Failed to save script: ${error instanceof Error ? error.message : String(error)}`);
     }
 }
 
-export async function getAllClaudeFrames(): Promise<ClaudeFrameData[]> {
-    await initializeDatabase();
+export async function getAllScripts(): Promise<Script[]> {
+    const sql = await getDatabaseConnection();
 
     try {
-        const sql = neon(DATABASE_URL!);
         const result = await sql`
-            SELECT id, name, description, frames, reasoning, python_code, frame_count, is_active, created_at
-            FROM claude_frames
+            SELECT id, title, description, python_code, frames, frame_count, framerate, created_by, reasoning, is_active, created_at
+            FROM scripts
             ORDER BY created_at DESC
         `;
 
-        const scripts: ClaudeFrameData[] = result.map((row) => ({
+        const scripts: Script[] = result.map((row) => ({
             id: row.id as number,
-            name: row.name as string,
+            title: row.title as string,
             description: row.description as string,
-            frames: row.frames as string[],
-            reasoning: row.reasoning as string,
             pythonCode: row.python_code as string,
-            timestamp: row.created_at as string,
+            frames: row.frames as string[],
             frameCount: row.frame_count as number,
+            framerate: (row.framerate as number) || 60,
+            createdBy: row.created_by as "user" | "claude",
+            reasoning: row.reasoning as string | undefined,
             isActive: row.is_active as boolean,
+            timestamp: row.created_at as string,
         }));
 
-        console.log("[STORAGE:DEBUG] ✅ Loaded all Claude frames from database:", scripts.length);
+        console.log("[STORAGE:DEBUG] ✅ Loaded all scripts from database:", scripts.length);
         return scripts;
     } catch (error) {
-        console.error("[STORAGE:DEBUG] ❌ Failed to read Claude frames from database:", error);
-        throw new Error(`Failed to get Claude frames: ${error instanceof Error ? error.message : String(error)}`);
+        console.error("[STORAGE:DEBUG] ❌ Failed to read scripts from database:", error);
+        throw new Error(`Failed to get scripts: ${error instanceof Error ? error.message : String(error)}`);
     }
 }
 
-export async function getClaudeFramesById(id: number): Promise<ClaudeFrameData | null> {
-    await initializeDatabase();
+export async function getScriptById(id: number): Promise<Script | null> {
+    const sql = await getDatabaseConnection();
 
     try {
-        const sql = neon(DATABASE_URL!);
         const result = await sql`
-            SELECT id, name, description, frames, reasoning, python_code, frame_count, is_active, created_at
-            FROM claude_frames
+            SELECT id, title, description, python_code, frames, frame_count, framerate, created_by, reasoning, is_active, created_at
+            FROM scripts
             WHERE id = ${id}
         `;
 
         if (result.length === 0) {
-            console.log("[STORAGE:DEBUG] No Claude frames found with ID:", id);
+            console.log("[STORAGE:DEBUG] No script found with ID:", id);
             return null;
         }
 
         const row = result[0];
-        const data: ClaudeFrameData = {
+        const script: Script = {
             id: row.id as number,
-            name: row.name as string,
+            title: row.title as string,
             description: row.description as string,
-            frames: row.frames as string[],
-            reasoning: row.reasoning as string,
             pythonCode: row.python_code as string,
-            timestamp: row.created_at as string,
+            frames: row.frames as string[],
             frameCount: row.frame_count as number,
+            framerate: (row.framerate as number) || 60,
+            createdBy: row.created_by as "user" | "claude",
+            reasoning: row.reasoning as string | undefined,
             isActive: row.is_active as boolean,
+            timestamp: row.created_at as string,
         };
 
-        console.log("[STORAGE:DEBUG] ✅ Loaded Claude frames from database:", data.id);
-        return data;
+        console.log("[STORAGE:DEBUG] ✅ Loaded script from database:", script.id);
+        return script;
     } catch (error) {
-        console.error("[STORAGE:DEBUG] ❌ Failed to read Claude frames from database:", error);
-        throw new Error(`Failed to get Claude frames: ${error instanceof Error ? error.message : String(error)}`);
+        console.error("[STORAGE:DEBUG] ❌ Failed to read script from database:", error);
+        throw new Error(`Failed to get script: ${error instanceof Error ? error.message : String(error)}`);
     }
 }
 
-export async function getActiveClaudeFrames(): Promise<ClaudeFrameData | null> {
-    await initializeDatabase();
+export async function getActiveScript(): Promise<Script | null> {
+    const sql = await getDatabaseConnection();
 
     try {
-        const sql = neon(DATABASE_URL!);
         const result = await sql`
-            SELECT id, name, description, frames, reasoning, python_code, frame_count, is_active, created_at
-            FROM claude_frames
+            SELECT id, title, description, python_code, frames, frame_count, framerate, created_by, reasoning, is_active, created_at
+            FROM scripts
             WHERE is_active = TRUE
             LIMIT 1
         `;
 
         if (result.length === 0) {
-            console.log("[STORAGE:DEBUG] No active Claude frames found in database");
+            console.log("[STORAGE:DEBUG] No active script found in database");
             return null;
         }
 
         const row = result[0];
-        const data: ClaudeFrameData = {
+        const script: Script = {
             id: row.id as number,
-            name: row.name as string,
+            title: row.title as string,
             description: row.description as string,
-            frames: row.frames as string[],
-            reasoning: row.reasoning as string,
             pythonCode: row.python_code as string,
-            timestamp: row.created_at as string,
+            frames: row.frames as string[],
             frameCount: row.frame_count as number,
+            framerate: (row.framerate as number) || 60,
+            createdBy: row.created_by as "user" | "claude",
+            reasoning: row.reasoning as string | undefined,
             isActive: row.is_active as boolean,
+            timestamp: row.created_at as string,
         };
 
-        console.log("[STORAGE:DEBUG] ✅ Loaded active Claude frames from database");
-        return data;
+        console.log("[STORAGE:DEBUG] ✅ Loaded active script from database");
+        return script;
     } catch (error) {
-        console.error("[STORAGE:DEBUG] ❌ Failed to read active Claude frames from database:", error);
-        throw new Error(`Failed to get active Claude frames: ${error instanceof Error ? error.message : String(error)}`);
+        console.error("[STORAGE:DEBUG] ❌ Failed to read active script from database:", error);
+        throw new Error(`Failed to get active script: ${error instanceof Error ? error.message : String(error)}`);
     }
 }
 
-export async function setActiveClaudeFrames(id: number): Promise<void> {
-    await initializeDatabase();
+export async function setActiveScript(id: number): Promise<void> {
+    const sql = await getDatabaseConnection();
 
     try {
-        const sql = neon(DATABASE_URL!);
 
         // First deactivate all scripts
-        await sql`UPDATE claude_frames SET is_active = FALSE`;
+        await sql`UPDATE scripts SET is_active = FALSE`;
 
         // Then activate the specified script
         await sql`
-            UPDATE claude_frames
+            UPDATE scripts
             SET is_active = TRUE
             WHERE id = ${id}
         `;
 
-        console.log("[STORAGE:DEBUG] ✅ Set Claude frames as active:", id);
+        console.log("[STORAGE:DEBUG] ✅ Set script as active:", id);
     } catch (error) {
-        console.error("[STORAGE:DEBUG] ❌ Failed to set active Claude frames:", error);
-        throw new Error(`Failed to set active Claude frames: ${error instanceof Error ? error.message : String(error)}`);
+        console.error("[STORAGE:DEBUG] ❌ Failed to set active script:", error);
+        throw new Error(`Failed to set active script: ${error instanceof Error ? error.message : String(error)}`);
     }
 }
 
-// Legacy function for backward compatibility - returns active script or latest
-export async function getClaudeFrames(): Promise<ClaudeFrameData | null> {
-    const active = await getActiveClaudeFrames();
-    if (active) return active;
-
-    // If no active script, return the latest one
-    const all = await getAllClaudeFrames();
-    return all.length > 0 ? all[0] : null;
-}
-
-// ============================================================================
-// LED STATE STORAGE
-// ============================================================================
-
-export async function saveLEDState(mode: string, data: Record<string, unknown>): Promise<void> {
-    const timestamp = new Date().toISOString();
-
-    await initializeDatabase();
+export async function deleteScript(id: number): Promise<void> {
+    const sql = await getDatabaseConnection();
 
     try {
-        const sql = neon(DATABASE_URL!);
         await sql`
-            UPDATE led_state
-            SET mode = ${mode},
-                data = ${JSON.stringify(data)}::jsonb,
-                updated_at = ${timestamp}::timestamp
-            WHERE id = 1
+            DELETE FROM scripts
+            WHERE id = ${id}
         `;
-        console.log("[STORAGE:DEBUG] ✅ Saved LED state to database");
+
+        console.log("[STORAGE:DEBUG] ✅ Deleted script:", id);
     } catch (error) {
-        console.error("[STORAGE:DEBUG] ❌ Failed to save LED state to database:", error);
-        throw new Error(`Failed to save LED state: ${error instanceof Error ? error.message : String(error)}`);
+        console.error("[STORAGE:DEBUG] ❌ Failed to delete script:", error);
+        throw new Error(`Failed to delete script: ${error instanceof Error ? error.message : String(error)}`);
     }
 }
 
-export async function getLEDState(): Promise<LEDStateData | null> {
-    await initializeDatabase();
+export async function updateScript(
+    id: number,
+    title: string,
+    description: string,
+    pythonCode: string,
+    frames: string[],
+    framerate: number = 60
+): Promise<void> {
+    const frameCount = frames.length;
+
+    const sql = await getDatabaseConnection();
 
     try {
-        const sql = neon(DATABASE_URL!);
-        const result = await sql`
-            SELECT mode, data, updated_at
-            FROM led_state
-            WHERE id = 1
+        await sql`
+            UPDATE scripts
+            SET title = ${title},
+                description = ${description},
+                python_code = ${pythonCode},
+                frames = ${JSON.stringify(frames)}::jsonb,
+                frame_count = ${frameCount},
+                framerate = ${framerate}
+            WHERE id = ${id}
         `;
 
-        if (result.length === 0) {
-            console.log("[STORAGE:DEBUG] No LED state found in database");
-            return null;
-        }
-
-        const row = result[0];
-        const data: LEDStateData = {
-            mode: row.mode as string,
-            data: row.data as Record<string, unknown>,
-            timestamp: row.updated_at as string,
-        };
-
-        console.log("[STORAGE:DEBUG] ✅ Loaded LED state from database");
-        return data;
+        console.log("[STORAGE:DEBUG] ✅ Updated script:", id);
     } catch (error) {
-        console.error("[STORAGE:DEBUG] ❌ Failed to read LED state from database:", error);
-        throw new Error(`Failed to get LED state: ${error instanceof Error ? error.message : String(error)}`);
+        console.error("[STORAGE:DEBUG] ❌ Failed to update script:", error);
+        throw new Error(`Failed to update script: ${error instanceof Error ? error.message : String(error)}`);
     }
 }
 

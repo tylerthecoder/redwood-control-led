@@ -2,6 +2,7 @@
 
 import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
+import { getFullLEDState } from "../lib/actions";
 
 interface SimpleMode {
     mode: "simple";
@@ -15,20 +16,22 @@ interface LoopMode {
     delay: number;
 }
 
-interface CustomMode {
-    mode: "custom";
+interface ScriptMode {
+    mode: "script";
     framerate: number;
-    currentBufferIndex?: number;
+    buffers?: number[][];
+    totalBuffers?: number;
 }
 
-type LedState = SimpleMode | LoopMode | CustomMode;
+interface ClaudeMode {
+    mode: "claude";
+}
+
+type LedState = SimpleMode | LoopMode | ScriptMode | ClaudeMode;
 
 async function fetchLEDState(): Promise<LedState> {
-    const response = await fetch("/api/control");
-    if (!response.ok) {
-        throw new Error("Failed to fetch LED state");
-    }
-    return response.json();
+    // Use server action to get full LED state
+    return await getFullLEDState();
 }
 
 function StateModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void }) {
@@ -111,33 +114,46 @@ function StateModal({ isOpen, onClose }: { isOpen: boolean; onClose: () => void 
                                         </div>
                                         <div>
                                             <span className="font-medium">Colors:</span>{" "}
-                                            {state.colors.length}
-                                            <div className="mt-2 flex flex-wrap gap-2">
-                                                {state.colors.map((color, index) => (
-                                                    <div
-                                                        key={index}
-                                                        className="w-8 h-8 rounded border border-solid border-black/[.08] dark:border-white/[.145]"
-                                                        style={{ backgroundColor: color }}
-                                                        title={color}
-                                                    />
-                                                ))}
-                                            </div>
+                                            {state.colors?.length ?? 0}
+                                            {state.colors && state.colors.length > 0 && (
+                                                <div className="mt-2 flex flex-wrap gap-2">
+                                                    {state.colors.map((color, index) => (
+                                                        <div
+                                                            key={index}
+                                                            className="w-8 h-8 rounded border border-solid border-black/[.08] dark:border-white/[.145]"
+                                                            style={{ backgroundColor: color }}
+                                                            title={color}
+                                                        />
+                                                    ))}
+                                                </div>
+                                            )}
                                         </div>
                                     </div>
                                 )}
 
-                                {state.mode === "custom" && (
+                                {state.mode === "script" && (
                                     <div className="space-y-2 text-sm text-zinc-700 dark:text-zinc-300">
                                         <div>
                                             <span className="font-medium">Framerate:</span>{" "}
                                             {state.framerate} fps
                                         </div>
-                                        {state.currentBufferIndex !== undefined && (
+                                        {state.totalBuffers !== undefined && (
                                             <div>
-                                                <span className="font-medium">Current Buffer Index:</span>{" "}
-                                                {state.currentBufferIndex}
+                                                <span className="font-medium">Total Buffers:</span>{" "}
+                                                {state.totalBuffers}
                                             </div>
                                         )}
+                                    </div>
+                                )}
+
+                                {state.mode === "claude" && (
+                                    <div className="space-y-2 text-sm text-zinc-700 dark:text-zinc-300">
+                                        <div>
+                                            <span className="font-medium">Mode:</span> Claude AI
+                                        </div>
+                                        <div className="text-xs text-zinc-500 dark:text-zinc-400">
+                                            Using the most recent Claude-generated script
+                                        </div>
                                     </div>
                                 )}
                             </div>

@@ -23,22 +23,33 @@ export interface ScriptMode {
     totalBuffers: number;
 }
 
-export type LedState = SimpleMode | LoopMode | ScriptMode;
+export interface ClaudeMode {
+    mode: "claude";
+}
+
+export type LedState = SimpleMode | LoopMode | ScriptMode | ClaudeMode;
+
+// what is sent to the arduino
+export type ArduinoState = SimpleMode | LoopMode | { mode: "script", framerate: number };
+
+
 
 // ============================================================================
-// CLAUDE FRAMES TYPES
+// SCRIPT TYPES (Unified for both user and Claude scripts)
 // ============================================================================
 
-export interface ClaudeFrameData {
+export interface Script {
     id: number;
-    name: string;
+    title: string;
     description: string;
-    frames: string[];
-    reasoning: string;
     pythonCode: string;
-    timestamp: string;
+    frames: string[];
     frameCount: number;
+    framerate: number; // Frames per second for this script
+    createdBy: "user" | "claude";
+    reasoning?: string; // Only for Claude scripts
     isActive: boolean;
+    timestamp: string;
 }
 
 // ============================================================================
