@@ -19,15 +19,9 @@ export function useLEDState() {
         queryFn: fetchLEDState,
     });
 
-    const updateState = async (updates: any) => {
-        // Refetch after mutation
-        await queryClient.invalidateQueries({ queryKey: ["ledState"] });
-    };
-
     return {
         loading: isLoading,
         state: state,
-        updateState,
         // Convenience functions for mode changes
         setSimpleMode: async (options?: { on?: boolean; color?: string }) => {
             await setSimpleMode(options);

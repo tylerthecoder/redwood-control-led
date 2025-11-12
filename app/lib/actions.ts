@@ -3,7 +3,8 @@
 import { saveLEDStateFromState, getLEDStateAsState } from "./ledstate";
 import type { SimpleMode, LoopMode, ScriptMode, ClaudeMode, Script, LedState } from "./model";
 import { getAllScripts, getScriptById, saveScript, updateScript, deleteScript, setActiveScript } from "./storage";
-import { executeAndValidateScript } from "./script-execution";
+import { executeAndValidateScript, LED_LANGUAGE_EXPLANATION } from "./script-execution";
+import Anthropic from "@anthropic-ai/sdk";
 
 /**
  * Set LED mode to simple
@@ -421,6 +422,103 @@ export async function activateScriptAction(id: number): Promise<{ success: boole
         return {
             success: false,
             error: error instanceof Error ? error.message : "Failed to activate script"
+        };
+    }
+}
+
+/**
+ * Edit script code with AI
+ */
+export async function editScriptWithAI(userPrompt: string, currentCode: string): Promise<{ success: boolean; code?: string; error?: string }> {
+    "use server";
+
+    const ANTHROPIC_API_KEY = process.env.ANTHROPIC_API_KEY || "";
+    const ANTHROPIC_MODEL = "claude-sonnet-4-20250514";
+
+    if (!ANTHROPIC_API_KEY) {
+        return {
+            success: false,
+            error: "ANTHROPIC_API_KEY environment variable not set"
+        };
+    }
+
+    try {
+        const anthropic = new Anthropic({
+            apiKey: ANTHROPIC_API_KEY,
+        });
+
+        const prompt = `You are helping to edit Python code for an LED animation system.
+
+${LED_LANGUAGE_EXPLANATION}
+
+The user wants you to edit their code based on this request:
+${userPrompt}
+
+${currentCode ? `Here is their current code:\n\`\`\`python\n${currentCode}\n\`\`\`` : "They don't have any code yet, so create new code from scratch."}
+
+Please provide ONLY the Python code that fulfills their request. The code should:
+- Output LED frame data (lines of 60 comma-separated hex colors)
+- Each frame is one line with exactly 60 colors separated by commas
+- Each color must be in format #RRGGBB (e.g., #FF0000)
+- No explanatory text in the output
+- Only output the code, wrapped in \`\`\`python code blocks`;
+
+        const message = await anthropic.messages.create({
+            model: ANTHROPIC_MODEL,
+            max_tokens: 16000,
+            messages: [
+                {
+                    role: "user",
+                    content: prompt
+                }
+            ]
+        });
+
+        // Extract code from response
+        let pythonCode = "";
+        let fullText = "";
+
+        for (const block of message.content) {
+            if (block.type === "text") {
+                fullText += block.text + "\n";
+            }
+        }
+
+        // Try to extract code from code blocks
+        const codeBlockMatch = fullText.match(/```python\s*([\s\S]+?)```/i) ||
+            fullText.match(/```\s*([\s\S]+?)```/i);
+
+        if (codeBlockMatch) {
+            pythonCode = codeBlockMatch[1].trim();
+        } else {
+            // If no code blocks, try to find code at the end
+            const incompleteCodeMatch = fullText.match(/```python\s*([\s\S]+)$/i) ||
+                fullText.match(/```\s*([\s\S]+)$/i);
+            if (incompleteCodeMatch) {
+                pythonCode = incompleteCodeMatch[1].trim();
+            } else {
+                // Use entire text as code if no structured format found
+                pythonCode = fullText.trim();
+            }
+        }
+
+        if (!pythonCode || pythonCode.length < 10) {
+            return {
+                success: false,
+                error: "AI did not return valid Python code. Please try again with a more specific request."
+            };
+        }
+
+        return {
+            success: true,
+            code: pythonCode
+        };
+
+    } catch (error) {
+        console.error("Failed to edit script with AI:", error);
+        return {
+            success: false,
+            error: error instanceof Error ? error.message : "Unknown error occurred"
         };
     }
 }

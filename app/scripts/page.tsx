@@ -12,10 +12,11 @@ import {
     updateScriptAction,
     deleteScriptAction,
     activateScriptAction,
+    editScriptWithAI,
 } from "../lib/actions";
 
 export default function ScriptsPage() {
-    const { loading, updateState } = useLEDState();
+    const { loading, setScriptMode: setScriptModeHook } = useLEDState();
 
     // Script data
     const [scripts, setScripts] = useState<Script[]>([]);
@@ -41,6 +42,10 @@ export default function ScriptsPage() {
     const [isSaving, setIsSaving] = useState(false);
     const [showDocs, setShowDocs] = useState(false);
     const [showOutput, setShowOutput] = useState(false);
+    const [showAIEditModal, setShowAIEditModal] = useState(false);
+    const [aiEditPrompt, setAIEditPrompt] = useState("");
+    const [isAIEditing, setIsAIEditing] = useState(false);
+    const [aiEditError, setAIEditError] = useState<string | null>(null);
 
     // Fetch scripts on mount
     useEffect(() => {
@@ -147,16 +152,19 @@ export default function ScriptsPage() {
         }
     };
 
-    const sendToArduino = () => {
+    const sendToArduino = async () => {
         if (frames.length === 0) {
             return;
         }
 
-        updateState({
-            mode: "script",
-            frames,
-            framerate,
-        });
+        try {
+            await setScriptModeHook({
+                frames,
+                framerate,
+            });
+        } catch (error) {
+            console.error("Failed to send script to Arduino:", error);
+        }
     };
 
     const setActive = async (id: number) => {
@@ -354,13 +362,21 @@ export default function ScriptsPage() {
                                         <label htmlFor="pythonCode" className="block text-sm font-medium text-black dark:text-zinc-50">
                                             Python Code *
                                         </label>
-                                        <button
-                                            onClick={runScript}
-                                            disabled={isRunning || !title || !description || !pythonCode}
-                                            className="px-4 py-1 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
-                                        >
-                                            {isRunning ? "Running..." : "▶ Run Script"}
-                                        </button>
+                                        <div className="flex gap-2">
+                                            <button
+                                                onClick={() => setShowAIEditModal(true)}
+                                                className="px-4 py-1 text-sm rounded-lg bg-purple-600 text-white hover:bg-purple-700 transition-colors"
+                                            >
+                                                ✨ Edit with AI
+                                            </button>
+                                            <button
+                                                onClick={runScript}
+                                                disabled={isRunning || !title || !description || !pythonCode}
+                                                className="px-4 py-1 text-sm rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed transition-colors"
+                                            >
+                                                {isRunning ? "Running..." : "▶ Run Script"}
+                                            </button>
+                                        </div>
                                     </div>
                                     <textarea
                                         id="pythonCode"
@@ -493,6 +509,119 @@ export default function ScriptsPage() {
                 isOpen={showPreview}
                 onClose={() => setShowPreview(false)}
             />
+
+            {/* AI Edit Modal */}
+            {showAIEditModal && (
+                <div
+                    className="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+                    onClick={() => {
+                        setShowAIEditModal(false);
+                        setAIEditPrompt("");
+                        setAIEditError(null);
+                    }}
+                >
+                    <div
+                        className="bg-white dark:bg-black rounded-lg shadow-xl max-w-2xl w-full mx-4 border border-solid border-black/[.08] dark:border-white/[.145]"
+                        onClick={(e) => e.stopPropagation()}
+                    >
+                        <div className="p-6">
+                            <div className="flex items-center justify-between mb-4">
+                                <h2 className="text-2xl font-semibold text-black dark:text-zinc-50">
+                                    Edit with AI
+                                </h2>
+                                <button
+                                    onClick={() => {
+                                        setShowAIEditModal(false);
+                                        setAIEditPrompt("");
+                                        setAIEditError(null);
+                                    }}
+                                    className="text-zinc-600 dark:text-zinc-400 hover:text-black dark:hover:text-zinc-50 transition-colors"
+                                >
+                                    <svg
+                                        className="w-6 h-6"
+                                        fill="none"
+                                        stroke="currentColor"
+                                        viewBox="0 0 24 24"
+                                    >
+                                        <path
+                                            strokeLinecap="round"
+                                            strokeLinejoin="round"
+                                            strokeWidth={2}
+                                            d="M6 18L18 6M6 6l12 12"
+                                        />
+                                    </svg>
+                                </button>
+                            </div>
+
+                            <div className="space-y-4">
+                                <div>
+                                    <label htmlFor="aiEditPrompt" className="block text-sm font-medium text-black dark:text-zinc-50 mb-2">
+                                        What would you like to change?
+                                    </label>
+                                    <textarea
+                                        id="aiEditPrompt"
+                                        value={aiEditPrompt}
+                                        onChange={(e) => setAIEditPrompt(e.target.value)}
+                                        placeholder="e.g., Make the colors more vibrant, add a pulsing effect, change the speed, etc."
+                                        rows={4}
+                                        className="w-full px-4 py-2 rounded border border-solid border-black/[.08] dark:border-white/[.145] bg-white dark:bg-black text-black dark:text-zinc-50 resize-none"
+                                    />
+                                </div>
+
+                                {aiEditError && (
+                                    <div className="p-4 rounded-lg border-2 border-red-200 bg-red-50 dark:bg-red-950">
+                                        <p className="text-sm text-red-800 dark:text-red-200">{aiEditError}</p>
+                                    </div>
+                                )}
+
+                                <div className="flex gap-3 justify-end">
+                                    <button
+                                        onClick={() => {
+                                            setShowAIEditModal(false);
+                                            setAIEditPrompt("");
+                                            setAIEditError(null);
+                                        }}
+                                        className="px-4 py-2 rounded-lg bg-zinc-200 dark:bg-zinc-800 text-black dark:text-zinc-50 hover:bg-zinc-300 dark:hover:bg-zinc-700 transition-colors"
+                                    >
+                                        Cancel
+                                    </button>
+                                    <button
+                                        onClick={async () => {
+                                            if (!aiEditPrompt.trim()) {
+                                                setAIEditError("Please enter a description of what you'd like to change");
+                                                return;
+                                            }
+
+                                            setIsAIEditing(true);
+                                            setAIEditError(null);
+
+                                            try {
+                                                const result = await editScriptWithAI(aiEditPrompt, pythonCode);
+
+                                                if (result.success && result.code) {
+                                                    setPythonCode(result.code);
+                                                    setShowAIEditModal(false);
+                                                    setAIEditPrompt("");
+                                                } else {
+                                                    setAIEditError(result.error || "Failed to edit code");
+                                                }
+                                            } catch (error) {
+                                                setAIEditError(error instanceof Error ? error.message : "Unknown error occurred");
+                                            } finally {
+                                                setIsAIEditing(false);
+                                            }
+                                        }}
+                                        disabled={isAIEditing || !aiEditPrompt.trim()}
+                                        className="px-4 py-2 rounded-lg bg-purple-600 text-white hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                                    >
+                                        {isAIEditing ? "Editing..." : "✨ Apply Changes"}
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            )}
         </div>
     );
 }

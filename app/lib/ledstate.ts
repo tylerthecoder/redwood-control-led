@@ -114,7 +114,8 @@ export async function getLEDStateAsState(): Promise<LedState> {
 }
 
 export async function getArduinoState(): Promise<ArduinoState> {
-    const stored = await getLEDState();
+    const stored = await getLEDStateAsState();
+    console.log("[STORAGE:DEBUG] Stored LED state:", stored);
 
     if (!stored) {
         console.log("[STORAGE:DEBUG] No stored LED state found, returning default");
@@ -128,5 +129,5 @@ export async function getArduinoState(): Promise<ArduinoState> {
         };
     }
 
-    return stored as unknown as ArduinoState;
+    return stored as ArduinoState;
 }
