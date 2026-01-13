@@ -3,10 +3,11 @@
 import { useState, useEffect } from "react";
 import { useLEDState } from "../hooks/use-led-state";
 import LEDPreviewModal from "../components/led-preview-modal";
-import type { Script } from "../lib/model";
+import type { Script, ScriptSummary } from "../lib/model";
 import { LED_LANGUAGE_EXPLANATION } from "../lib/script-execution";
 import {
-    getAllScriptsAction,
+    getAllScriptsSummaryAction,
+    getScriptByIdAction,
     testScriptAction,
     createScriptAction,
     updateScriptAction,
@@ -18,10 +19,11 @@ import {
 export default function ScriptsPage() {
     const { loading, setScriptMode: setScriptModeHook } = useLEDState();
 
-    // Script data
-    const [scripts, setScripts] = useState<Script[]>([]);
+    // Script data - use summaries for listing (no frames), full Script when selected
+    const [scripts, setScripts] = useState<ScriptSummary[]>([]);
     const [selectedScript, setSelectedScript] = useState<Script | null>(null);
     const [loadingScripts, setLoadingScripts] = useState(true);
+    const [loadingSelectedScript, setLoadingSelectedScript] = useState(false);
 
     // Form state
     const [title, setTitle] = useState("");
@@ -47,6 +49,10 @@ export default function ScriptsPage() {
     const [isAIEditing, setIsAIEditing] = useState(false);
     const [aiEditError, setAIEditError] = useState<string | null>(null);
 
+    // Pagination state
+    const [currentPage, setCurrentPage] = useState(1);
+    const scriptsPerPage = 10;
+
     // Fetch scripts on mount
     useEffect(() => {
         fetchScripts();
@@ -55,8 +61,9 @@ export default function ScriptsPage() {
     const fetchScripts = async () => {
         try {
             setLoadingScripts(true);
-            const scripts = await getAllScriptsAction();
-            setScripts(scripts);
+            // Use summary endpoint to avoid loading large frame data
+            const scriptSummaries = await getAllScriptsSummaryAction();
+            setScripts(scriptSummaries);
         } catch (error) {
             console.error("Failed to fetch scripts:", error);
         } finally {
@@ -64,14 +71,28 @@ export default function ScriptsPage() {
         }
     };
 
-    const loadScript = (script: Script) => {
-        setSelectedScript(script);
-        setTitle(script.title);
-        setDescription(script.description);
-        setPythonCode(script.pythonCode);
-        setFrames(script.frames);
-        setFramerate(script.framerate || 60);
+    const loadScript = async (scriptSummary: ScriptSummary) => {
+        // Set basic info immediately for better UX
+        setTitle(scriptSummary.title);
+        setDescription(scriptSummary.description);
+        setPythonCode(scriptSummary.pythonCode);
+        setFramerate(scriptSummary.framerate || 60);
         setTestResult(null);
+        setFrames([]); // Clear frames while loading
+
+        // Load full script with frames from server
+        setLoadingSelectedScript(true);
+        try {
+            const fullScript = await getScriptByIdAction(scriptSummary.id);
+            if (fullScript) {
+                setSelectedScript(fullScript);
+                setFrames(fullScript.frames);
+            }
+        } catch (error) {
+            console.error("Failed to load script frames:", error);
+        } finally {
+            setLoadingSelectedScript(false);
+        }
     };
 
     const createNewScript = () => {
@@ -200,6 +221,19 @@ export default function ScriptsPage() {
 
     const activeScript = scripts.find(s => s.isActive);
 
+    // Pagination computed values
+    const totalPages = Math.ceil(scripts.length / scriptsPerPage);
+    const startIndex = (currentPage - 1) * scriptsPerPage;
+    const endIndex = startIndex + scriptsPerPage;
+    const paginatedScripts = scripts.slice(startIndex, endIndex);
+
+    // Reset to page 1 if current page is out of bounds (e.g., after deletion)
+    useEffect(() => {
+        if (currentPage > totalPages && totalPages > 0) {
+            setCurrentPage(totalPages);
+        }
+    }, [currentPage, totalPages]);
+
     return (
         <div className="flex min-h-screen flex-col bg-zinc-50 dark:bg-black font-sans pb-24">
             <main className="flex flex-row max-w-7xl w-full mx-auto flex-1">
@@ -225,73 +259,103 @@ export default function ScriptsPage() {
                     ) : scripts.length === 0 ? (
                         <div className="text-sm text-zinc-600 dark:text-zinc-400">No scripts yet. Create one!</div>
                     ) : (
-                        <div className="flex flex-col gap-3">
-                            {scripts.map((script) => (
-                                <div
-                                    key={script.id}
-                                    className={`p-4 rounded border border-solid transition-colors ${selectedScript?.id === script.id
-                                        ? "border-blue-500 bg-blue-50 dark:bg-blue-950"
-                                        : script.isActive
-                                            ? "border-green-500 bg-green-50 dark:bg-green-950"
-                                            : "border-black/[.08] dark:border-white/[.145] hover:bg-black/[.04] dark:hover:bg-[#1a1a1a]"
-                                        }`}
-                                >
-                                    <div className="flex items-start justify-between gap-2">
-                                        <div
-                                            className="flex-1 cursor-pointer"
-                                            onClick={() => loadScript(script)}
-                                        >
-                                            <div className="flex items-center gap-2">
-                                                <h3 className="font-semibold text-black dark:text-zinc-50">
-                                                    {script.title}
-                                                </h3>
-                                                {script.isActive && (
-                                                    <span className="text-xs px-2 py-0.5 rounded bg-green-500 text-white">
-                                                        Active
-                                                    </span>
-                                                )}
-                                                {script.createdBy === "claude" && (
-                                                    <span className="text-xs px-2 py-0.5 rounded bg-purple-500 text-white">
-                                                        Claude
-                                                    </span>
-                                                )}
+                        <>
+                            {/* Script count */}
+                            <div className="text-xs text-zinc-500 dark:text-zinc-400">
+                                Showing {startIndex + 1}-{Math.min(endIndex, scripts.length)} of {scripts.length} scripts
+                            </div>
+
+                            <div className="flex flex-col gap-3">
+                                {paginatedScripts.map((script) => (
+                                    <div
+                                        key={script.id}
+                                        className={`p-4 rounded border border-solid transition-colors ${selectedScript?.id === script.id
+                                            ? "border-blue-500 bg-blue-50 dark:bg-blue-950"
+                                            : script.isActive
+                                                ? "border-green-500 bg-green-50 dark:bg-green-950"
+                                                : "border-black/[.08] dark:border-white/[.145] hover:bg-black/[.04] dark:hover:bg-[#1a1a1a]"
+                                            }`}
+                                    >
+                                        <div className="flex items-start justify-between gap-2">
+                                            <div
+                                                className="flex-1 cursor-pointer"
+                                                onClick={() => loadScript(script)}
+                                            >
+                                                <div className="flex items-center gap-2">
+                                                    <h3 className="font-semibold text-black dark:text-zinc-50">
+                                                        {script.title}
+                                                    </h3>
+                                                    {script.isActive && (
+                                                        <span className="text-xs px-2 py-0.5 rounded bg-green-500 text-white">
+                                                            Active
+                                                        </span>
+                                                    )}
+                                                    {script.createdBy === "claude" && (
+                                                        <span className="text-xs px-2 py-0.5 rounded bg-purple-500 text-white">
+                                                            Claude
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <p className="text-xs text-zinc-500 dark:text-zinc-500 mt-1">
+                                                    {new Date(script.timestamp).toLocaleDateString()}
+                                                </p>
+                                                <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-2 line-clamp-2">
+                                                    {script.description}
+                                                </p>
+                                                <p className="text-xs text-zinc-500 dark:text-zinc-500 mt-1">
+                                                    {script.frameCount} frames
+                                                </p>
                                             </div>
-                                            <p className="text-xs text-zinc-500 dark:text-zinc-500 mt-1">
-                                                {new Date(script.timestamp).toLocaleDateString()}
-                                            </p>
-                                            <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-2 line-clamp-2">
-                                                {script.description}
-                                            </p>
-                                            <p className="text-xs text-zinc-500 dark:text-zinc-500 mt-1">
-                                                {script.frameCount} frames
-                                            </p>
-                                        </div>
-                                        <div className="flex flex-col gap-1">
-                                            {!script.isActive && (
+                                            <div className="flex flex-col gap-1">
+                                                {!script.isActive && (
+                                                    <button
+                                                        onClick={(e) => {
+                                                            e.stopPropagation();
+                                                            setActive(script.id);
+                                                        }}
+                                                        className="text-xs px-2 py-1 rounded bg-zinc-200 dark:bg-zinc-800 text-black dark:text-zinc-50 hover:bg-zinc-300 dark:hover:bg-zinc-700"
+                                                    >
+                                                        Set Active
+                                                    </button>
+                                                )}
                                                 <button
                                                     onClick={(e) => {
                                                         e.stopPropagation();
-                                                        setActive(script.id);
+                                                        deleteScriptById(script.id);
                                                     }}
-                                                    className="text-xs px-2 py-1 rounded bg-zinc-200 dark:bg-zinc-800 text-black dark:text-zinc-50 hover:bg-zinc-300 dark:hover:bg-zinc-700"
+                                                    className="text-xs px-2 py-1 rounded bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-800"
                                                 >
-                                                    Set Active
+                                                    Delete
                                                 </button>
-                                            )}
-                                            <button
-                                                onClick={(e) => {
-                                                    e.stopPropagation();
-                                                    deleteScriptById(script.id);
-                                                }}
-                                                className="text-xs px-2 py-1 rounded bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-800"
-                                            >
-                                                Delete
-                                            </button>
+                                            </div>
                                         </div>
                                     </div>
+                                ))}
+                            </div>
+
+                            {/* Pagination controls */}
+                            {totalPages > 1 && (
+                                <div className="flex items-center justify-between gap-2 pt-2 border-t border-zinc-200 dark:border-zinc-800">
+                                    <button
+                                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                                        disabled={currentPage === 1}
+                                        className="px-3 py-1.5 text-sm rounded bg-zinc-200 dark:bg-zinc-800 text-black dark:text-zinc-50 hover:bg-zinc-300 dark:hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                                    >
+                                        ← Prev
+                                    </button>
+                                    <span className="text-sm text-zinc-600 dark:text-zinc-400">
+                                        {currentPage} / {totalPages}
+                                    </span>
+                                    <button
+                                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                                        disabled={currentPage === totalPages}
+                                        className="px-3 py-1.5 text-sm rounded bg-zinc-200 dark:bg-zinc-800 text-black dark:text-zinc-50 hover:bg-zinc-300 dark:hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                                    >
+                                        Next →
+                                    </button>
                                 </div>
-                            ))}
-                        </div>
+                            )}
+                        </>
                     )}
                 </aside>
 
@@ -408,7 +472,7 @@ export default function ScriptsPage() {
                                 )}
 
                                 {/* Script Output (Frames) */}
-                                {(frames.length > 0 || (selectedScript && selectedScript.frames.length > 0)) && (
+                                {(frames.length > 0 || loadingSelectedScript) && (
                                     <div className="border border-solid border-black/[.08] dark:border-white/[.145] rounded-lg overflow-hidden">
                                         <button
                                             onClick={() => setShowOutput(!showOutput)}
@@ -419,7 +483,7 @@ export default function ScriptsPage() {
                                                     Script Output
                                                 </span>
                                                 <span className="text-xs text-zinc-500 dark:text-zinc-400">
-                                                    ({frames.length > 0 ? frames.length : selectedScript?.frames.length ?? 0} frames)
+                                                    {loadingSelectedScript ? "(loading...)" : `(${frames.length} frames)`}
                                                 </span>
                                             </div>
                                             <svg
@@ -438,9 +502,13 @@ export default function ScriptsPage() {
                                         </button>
                                         {showOutput && (
                                             <div className="p-4 bg-white dark:bg-black max-h-96 overflow-y-auto">
-                                                <pre className="text-xs font-mono text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap break-all">
-                                                    {(frames.length > 0 ? frames : selectedScript?.frames ?? []).join("\n")}
-                                                </pre>
+                                                {loadingSelectedScript ? (
+                                                    <p className="text-sm text-zinc-500 dark:text-zinc-400">Loading frames...</p>
+                                                ) : (
+                                                    <pre className="text-xs font-mono text-zinc-700 dark:text-zinc-300 whitespace-pre-wrap break-all">
+                                                        {frames.join("\n")}
+                                                    </pre>
+                                                )}
                                             </div>
                                         )}
                                     </div>

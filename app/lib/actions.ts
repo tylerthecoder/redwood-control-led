@@ -1,8 +1,8 @@
 "use server";
 
 import { saveLEDStateFromState, getLEDStateAsState } from "./ledstate";
-import type { SimpleMode, LoopMode, ScriptMode, ClaudeMode, Script, LedState } from "./model";
-import { getAllScripts, getScriptById, saveScript, updateScript, deleteScript, setActiveScript } from "./storage";
+import type { SimpleMode, LoopMode, ScriptMode, ClaudeMode, Script, ScriptSummary, LedState } from "./model";
+import { getAllScripts, getAllScriptsSummary, getScriptById, saveScript, updateScript, deleteScript, setActiveScript } from "./storage";
 import { executeAndValidateScript, LED_LANGUAGE_EXPLANATION } from "./script-execution";
 import Anthropic from "@anthropic-ai/sdk";
 
@@ -125,11 +125,22 @@ export async function getFullLEDState(): Promise<LedState> {
 // ============================================================================
 
 /**
- * Get all scripts
+ * Get all scripts (full data including frames)
+ * WARNING: This can exceed Neon's 64MB limit if there are many scripts
+ * Use getAllScriptsSummaryAction() for listing instead
  */
 export async function getAllScriptsAction(): Promise<Script[]> {
     "use server";
     return await getAllScripts();
+}
+
+/**
+ * Get all scripts without frames (lightweight for listing)
+ * This avoids the 64MB response limit when there are many scripts
+ */
+export async function getAllScriptsSummaryAction(): Promise<ScriptSummary[]> {
+    "use server";
+    return await getAllScriptsSummary();
 }
 
 /**

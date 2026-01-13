@@ -1,6 +1,6 @@
 // Storage abstraction layer - Uses Neon Postgres database
 import { neon } from "@neondatabase/serverless";
-import type { Script } from "./model";
+import type { Script, ScriptSummary } from "./model";
 
 // ============================================================================
 // CONFIGURATION
@@ -184,6 +184,42 @@ export async function getAllScripts(): Promise<Script[]> {
     }
 }
 
+/**
+ * Get all scripts WITHOUT the frames data (lightweight for listing)
+ * This avoids the 64MB response limit when there are many scripts with large frame arrays
+ */
+export async function getAllScriptsSummary(): Promise<ScriptSummary[]> {
+    const sql = await getDatabaseConnection();
+
+    try {
+        // Explicitly exclude the 'frames' column to keep response size small
+        const result = await sql`
+            SELECT id, title, description, python_code, frame_count, framerate, created_by, reasoning, is_active, created_at
+            FROM scripts
+            ORDER BY created_at DESC
+        `;
+
+        const scripts: ScriptSummary[] = result.map((row) => ({
+            id: row.id as number,
+            title: row.title as string,
+            description: row.description as string,
+            pythonCode: row.python_code as string,
+            frameCount: row.frame_count as number,
+            framerate: (row.framerate as number) || 60,
+            createdBy: row.created_by as "user" | "claude",
+            reasoning: row.reasoning as string | undefined,
+            isActive: row.is_active as boolean,
+            timestamp: row.created_at as string,
+        }));
+
+        console.log("[STORAGE:DEBUG] ✅ Loaded script summaries from database:", scripts.length);
+        return scripts;
+    } catch (error) {
+        console.error("[STORAGE:DEBUG] ❌ Failed to read script summaries from database:", error);
+        throw new Error(`Failed to get script summaries: ${error instanceof Error ? error.message : String(error)}`);
+    }
+}
+
 export async function getScriptById(id: number): Promise<Script | null> {
     const sql = await getDatabaseConnection();
 
@@ -258,6 +294,50 @@ export async function getActiveScript(): Promise<Script | null> {
     } catch (error) {
         console.error("[STORAGE:DEBUG] ❌ Failed to read active script from database:", error);
         throw new Error(`Failed to get active script: ${error instanceof Error ? error.message : String(error)}`);
+    }
+}
+
+/**
+ * Get the most recent script created by Claude
+ * This is optimized to fetch only the single most recent Claude script directly from the database
+ */
+export async function getMostRecentClaudeScript(): Promise<Script | null> {
+    const sql = await getDatabaseConnection();
+
+    try {
+        const result = await sql`
+            SELECT id, title, description, python_code, frames, frame_count, framerate, created_by, reasoning, is_active, created_at
+            FROM scripts
+            WHERE created_by = 'claude'
+            ORDER BY created_at DESC
+            LIMIT 1
+        `;
+
+        if (result.length === 0) {
+            console.log("[STORAGE:DEBUG] No Claude script found in database");
+            return null;
+        }
+
+        const row = result[0];
+        const script: Script = {
+            id: row.id as number,
+            title: row.title as string,
+            description: row.description as string,
+            pythonCode: row.python_code as string,
+            frames: row.frames as string[],
+            frameCount: row.frame_count as number,
+            framerate: (row.framerate as number) || 60,
+            createdBy: row.created_by as "user" | "claude",
+            reasoning: row.reasoning as string | undefined,
+            isActive: row.is_active as boolean,
+            timestamp: row.created_at as string,
+        };
+
+        console.log("[STORAGE:DEBUG] ✅ Loaded most recent Claude script from database:", script.id);
+        return script;
+    } catch (error) {
+        console.error("[STORAGE:DEBUG] ❌ Failed to read most recent Claude script from database:", error);
+        throw new Error(`Failed to get most recent Claude script: ${error instanceof Error ? error.message : String(error)}`);
     }
 }
 

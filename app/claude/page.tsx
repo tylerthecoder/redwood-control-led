@@ -1,15 +1,19 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import { setClaudeMode, getAllScriptsAction } from "../lib/actions";
-import type { Script } from "../lib/model";
+import { setClaudeMode, getAllScriptsSummaryAction } from "../lib/actions";
+import type { ScriptSummary } from "../lib/model";
 
 export default function ClaudePage() {
     const [loading, setLoading] = useState(false);
     const [activated, setActivated] = useState(false);
     const [generating, setGenerating] = useState(false);
-    const [claudeScripts, setClaudeScripts] = useState<Script[]>([]);
+    const [claudeScripts, setClaudeScripts] = useState<ScriptSummary[]>([]);
     const [loadingScripts, setLoadingScripts] = useState(true);
+
+    // Pagination state
+    const [currentPage, setCurrentPage] = useState(1);
+    const scriptsPerPage = 10;
 
     useEffect(() => {
         fetchClaudeScripts();
@@ -18,7 +22,8 @@ export default function ClaudePage() {
     const fetchClaudeScripts = async () => {
         try {
             setLoadingScripts(true);
-            const allScripts = await getAllScriptsAction();
+            // Use summary endpoint to avoid loading large frame data
+            const allScripts = await getAllScriptsSummaryAction();
             const claudeOnly = allScripts.filter(s => s.createdBy === "claude");
             setClaudeScripts(claudeOnly);
         } catch (error) {
@@ -58,6 +63,19 @@ export default function ClaudePage() {
         }
     };
 
+    // Pagination computed values
+    const totalPages = Math.ceil(claudeScripts.length / scriptsPerPage);
+    const startIndex = (currentPage - 1) * scriptsPerPage;
+    const endIndex = startIndex + scriptsPerPage;
+    const paginatedScripts = claudeScripts.slice(startIndex, endIndex);
+
+    // Reset to page 1 if current page is out of bounds
+    useEffect(() => {
+        if (currentPage > totalPages && totalPages > 0) {
+            setCurrentPage(totalPages);
+        }
+    }, [currentPage, totalPages]);
+
     return (
         <div className="flex min-h-screen flex-col bg-zinc-50 font-sans dark:bg-black pb-24">
             <main className="flex flex-row max-w-7xl w-full mx-auto flex-1">
@@ -74,41 +92,71 @@ export default function ClaudePage() {
                     ) : claudeScripts.length === 0 ? (
                         <div className="text-sm text-zinc-600 dark:text-zinc-400">No Claude scripts yet. Generate one!</div>
                     ) : (
-                        <div className="flex flex-col gap-3">
-                            {claudeScripts.map((script) => (
-                                <div
-                                    key={script.id}
-                                    className={`p-4 rounded border border-solid transition-colors ${script.isActive
-                                        ? "border-green-500 bg-green-50 dark:bg-green-950"
-                                        : "border-black/[.08] dark:border-white/[.145] hover:bg-black/[.04] dark:hover:bg-[#1a1a1a]"
-                                        }`}
-                                >
-                                    <div className="flex items-start justify-between gap-2">
-                                        <div className="flex-1">
-                                            <div className="flex items-center gap-2">
-                                                <h3 className="font-semibold text-black dark:text-zinc-50">
-                                                    {script.title}
-                                                </h3>
-                                                {script.isActive && (
-                                                    <span className="text-xs px-2 py-0.5 rounded bg-green-500 text-white">
-                                                        Active
-                                                    </span>
-                                                )}
+                        <>
+                            {/* Script count */}
+                            <div className="text-xs text-zinc-500 dark:text-zinc-400">
+                                Showing {startIndex + 1}-{Math.min(endIndex, claudeScripts.length)} of {claudeScripts.length} scripts
+                            </div>
+
+                            <div className="flex flex-col gap-3">
+                                {paginatedScripts.map((script) => (
+                                    <div
+                                        key={script.id}
+                                        className={`p-4 rounded border border-solid transition-colors ${script.isActive
+                                            ? "border-green-500 bg-green-50 dark:bg-green-950"
+                                            : "border-black/[.08] dark:border-white/[.145] hover:bg-black/[.04] dark:hover:bg-[#1a1a1a]"
+                                            }`}
+                                    >
+                                        <div className="flex items-start justify-between gap-2">
+                                            <div className="flex-1">
+                                                <div className="flex items-center gap-2">
+                                                    <h3 className="font-semibold text-black dark:text-zinc-50">
+                                                        {script.title}
+                                                    </h3>
+                                                    {script.isActive && (
+                                                        <span className="text-xs px-2 py-0.5 rounded bg-green-500 text-white">
+                                                            Active
+                                                        </span>
+                                                    )}
+                                                </div>
+                                                <p className="text-xs text-zinc-500 dark:text-zinc-500 mt-1">
+                                                    {new Date(script.timestamp).toLocaleDateString()}
+                                                </p>
+                                                <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-2 line-clamp-2">
+                                                    {script.description}
+                                                </p>
+                                                <p className="text-xs text-zinc-500 dark:text-zinc-500 mt-1">
+                                                    {script.frameCount} frames
+                                                </p>
                                             </div>
-                                            <p className="text-xs text-zinc-500 dark:text-zinc-500 mt-1">
-                                                {new Date(script.timestamp).toLocaleDateString()}
-                                            </p>
-                                            <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-2 line-clamp-2">
-                                                {script.description}
-                                            </p>
-                                            <p className="text-xs text-zinc-500 dark:text-zinc-500 mt-1">
-                                                {script.frameCount} frames
-                                            </p>
                                         </div>
                                     </div>
+                                ))}
+                            </div>
+
+                            {/* Pagination controls */}
+                            {totalPages > 1 && (
+                                <div className="flex items-center justify-between gap-2 pt-2 border-t border-zinc-200 dark:border-zinc-800">
+                                    <button
+                                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                                        disabled={currentPage === 1}
+                                        className="px-3 py-1.5 text-sm rounded bg-zinc-200 dark:bg-zinc-800 text-black dark:text-zinc-50 hover:bg-zinc-300 dark:hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                                    >
+                                        ← Prev
+                                    </button>
+                                    <span className="text-sm text-zinc-600 dark:text-zinc-400">
+                                        {currentPage} / {totalPages}
+                                    </span>
+                                    <button
+                                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                                        disabled={currentPage === totalPages}
+                                        className="px-3 py-1.5 text-sm rounded bg-zinc-200 dark:bg-zinc-800 text-black dark:text-zinc-50 hover:bg-zinc-300 dark:hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                                    >
+                                        Next →
+                                    </button>
                                 </div>
-                            ))}
-                        </div>
+                            )}
+                        </>
                     )}
                 </aside>
 

@@ -52,6 +52,20 @@ export interface Script {
     timestamp: string;
 }
 
+// Lightweight version of Script for listing (excludes large frames array)
+export interface ScriptSummary {
+    id: number;
+    title: string;
+    description: string;
+    pythonCode: string;
+    frameCount: number;
+    framerate: number;
+    createdBy: "user" | "claude";
+    reasoning?: string;
+    isActive: boolean;
+    timestamp: string;
+}
+
 // ============================================================================
 // STORAGE TYPES (used by storage layer)
 // ============================================================================

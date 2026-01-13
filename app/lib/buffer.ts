@@ -1,10 +1,8 @@
 // Buffer management for script and claude modes
 import { getLEDStateAsState } from "./ledstate";
-import { getAllScripts } from "./storage";
-import type { Script } from "./model";
+import { getMostRecentClaudeScript } from "./storage";
 
 const BUFFER_DURATION_SECONDS = 0.5; // 0.5 second buffers to reduce JSON size (~16KB vs ~32KB)
-const NUM_LEDS = 60;
 
 // Convert hex color string to 24-bit RGB number
 function hexToNumber(hex: string): number {
@@ -33,21 +31,6 @@ function processFormatFrames(frames: string[], framerate: number): number[][] {
     }
 
     return buffers;
-}
-
-/**
- * Get the most recent script created by Claude
- */
-async function getMostRecentClaudeScript(): Promise<Script | null> {
-    const scripts = await getAllScripts();
-    const claudeScripts = scripts.filter(s => s.createdBy === "claude");
-
-    if (claudeScripts.length === 0) {
-        return null;
-    }
-
-    // Scripts are already sorted by created_at DESC, so first claude script is most recent
-    return claudeScripts[0];
 }
 
 /**
