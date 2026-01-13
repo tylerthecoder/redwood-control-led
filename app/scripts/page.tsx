@@ -238,82 +238,78 @@ export default function ScriptsPage() {
         <div className="flex min-h-screen flex-col bg-zinc-50 dark:bg-black font-sans pb-24">
             <main className="flex flex-row max-w-7xl w-full mx-auto flex-1">
                 {/* Sidebar */}
-                <aside className="hidden lg:flex w-80 flex-col gap-4 p-8 border-r border-zinc-200 dark:border-zinc-800 max-h-[calc(100vh-6rem)] overflow-y-auto">
-                    <div className="sticky top-0 bg-zinc-50 dark:bg-black py-2 z-10 border-b border-zinc-200 dark:border-zinc-800 -mx-4 px-4 mb-2">
-                        <h2 className="text-xl font-semibold text-black dark:text-zinc-50">
+                <aside className="hidden lg:flex w-72 flex-col border-r border-zinc-200 dark:border-zinc-800 h-[calc(100vh-6rem)] flex-shrink-0">
+                    {/* Fixed header */}
+                    <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-black">
+                        <h2 className="text-lg font-semibold text-black dark:text-zinc-50 mb-3">
                             Scripts
                         </h2>
+                        <button
+                            onClick={createNewScript}
+                            className="w-full py-2.5 rounded border-2 border-dashed border-blue-500 bg-blue-50 dark:bg-blue-950 hover:bg-blue-100 dark:hover:bg-blue-900 transition-colors"
+                        >
+                            <span className="text-blue-700 dark:text-blue-300 font-medium text-sm">
+                                + New Script
+                            </span>
+                        </button>
                     </div>
 
-                    <button
-                        onClick={createNewScript}
-                        className="w-full p-4 rounded border-2 border-dashed border-blue-500 bg-blue-50 dark:bg-blue-950 hover:bg-blue-100 dark:hover:bg-blue-900 transition-colors"
-                    >
-                        <span className="text-blue-700 dark:text-blue-300 font-medium">
-                            + New Script
-                        </span>
-                    </button>
+                    {/* Scrollable content */}
+                    <div className="flex-1 overflow-y-auto p-4">
+                        {loadingScripts ? (
+                            <div className="text-sm text-zinc-600 dark:text-zinc-400">Loading scripts...</div>
+                        ) : scripts.length === 0 ? (
+                            <div className="text-sm text-zinc-600 dark:text-zinc-400">No scripts yet. Create one!</div>
+                        ) : (
+                            <>
+                                {/* Script count */}
+                                <div className="text-xs text-zinc-500 dark:text-zinc-400 mb-3">
+                                    {startIndex + 1}-{Math.min(endIndex, scripts.length)} of {scripts.length}
+                                </div>
 
-                    {loadingScripts ? (
-                        <div className="text-sm text-zinc-600 dark:text-zinc-400">Loading scripts...</div>
-                    ) : scripts.length === 0 ? (
-                        <div className="text-sm text-zinc-600 dark:text-zinc-400">No scripts yet. Create one!</div>
-                    ) : (
-                        <>
-                            {/* Script count */}
-                            <div className="text-xs text-zinc-500 dark:text-zinc-400">
-                                Showing {startIndex + 1}-{Math.min(endIndex, scripts.length)} of {scripts.length} scripts
-                            </div>
+                                <div className="flex flex-col gap-2">
+                                    {paginatedScripts.map((script) => (
+                                        <div
+                                            key={script.id}
+                                            onClick={() => loadScript(script)}
+                                            className={`p-3 rounded border border-solid transition-colors cursor-pointer ${selectedScript?.id === script.id
+                                                ? "border-blue-500 bg-blue-50 dark:bg-blue-950"
+                                                : script.isActive
+                                                    ? "border-green-500 bg-green-50 dark:bg-green-950"
+                                                    : "border-black/[.08] dark:border-white/[.145] hover:bg-black/[.04] dark:hover:bg-[#1a1a1a]"
+                                                }`}
+                                        >
+                                            {/* Title - truncated */}
+                                            <h3 className="font-medium text-sm text-black dark:text-zinc-50 truncate">
+                                                {script.title}
+                                            </h3>
 
-                            <div className="flex flex-col gap-3">
-                                {paginatedScripts.map((script) => (
-                                    <div
-                                        key={script.id}
-                                        className={`p-4 rounded border border-solid transition-colors ${selectedScript?.id === script.id
-                                            ? "border-blue-500 bg-blue-50 dark:bg-blue-950"
-                                            : script.isActive
-                                                ? "border-green-500 bg-green-50 dark:bg-green-950"
-                                                : "border-black/[.08] dark:border-white/[.145] hover:bg-black/[.04] dark:hover:bg-[#1a1a1a]"
-                                            }`}
-                                    >
-                                        <div className="flex items-start justify-between gap-2">
-                                            <div
-                                                className="flex-1 cursor-pointer"
-                                                onClick={() => loadScript(script)}
-                                            >
-                                                <div className="flex items-center gap-2">
-                                                    <h3 className="font-semibold text-black dark:text-zinc-50">
-                                                        {script.title}
-                                                    </h3>
-                                                    {script.isActive && (
-                                                        <span className="text-xs px-2 py-0.5 rounded bg-green-500 text-white">
-                                                            Active
-                                                        </span>
-                                                    )}
-                                                    {script.createdBy === "claude" && (
-                                                        <span className="text-xs px-2 py-0.5 rounded bg-purple-500 text-white">
-                                                            Claude
-                                                        </span>
-                                                    )}
-                                                </div>
-                                                <p className="text-xs text-zinc-500 dark:text-zinc-500 mt-1">
+                                            {/* Date and badges row */}
+                                            <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                                                <span className="text-xs text-zinc-500 dark:text-zinc-500">
                                                     {new Date(script.timestamp).toLocaleDateString()}
-                                                </p>
-                                                <p className="text-sm text-zinc-600 dark:text-zinc-400 mt-2 line-clamp-2">
-                                                    {script.description}
-                                                </p>
-                                                <p className="text-xs text-zinc-500 dark:text-zinc-500 mt-1">
-                                                    {script.frameCount} frames
-                                                </p>
+                                                </span>
+                                                {script.isActive && (
+                                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-500 text-white font-medium">
+                                                        Active
+                                                    </span>
+                                                )}
+                                                {script.createdBy === "claude" && (
+                                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-purple-500 text-white font-medium">
+                                                        Claude
+                                                    </span>
+                                                )}
                                             </div>
-                                            <div className="flex flex-col gap-1">
+
+                                            {/* Action buttons */}
+                                            <div className="flex gap-1.5 mt-2">
                                                 {!script.isActive && (
                                                     <button
                                                         onClick={(e) => {
                                                             e.stopPropagation();
                                                             setActive(script.id);
                                                         }}
-                                                        className="text-xs px-2 py-1 rounded bg-zinc-200 dark:bg-zinc-800 text-black dark:text-zinc-50 hover:bg-zinc-300 dark:hover:bg-zinc-700"
+                                                        className="text-[11px] px-2 py-1 rounded bg-zinc-200 dark:bg-zinc-800 text-black dark:text-zinc-50 hover:bg-zinc-300 dark:hover:bg-zinc-700"
                                                     >
                                                         Set Active
                                                     </button>
@@ -323,39 +319,39 @@ export default function ScriptsPage() {
                                                         e.stopPropagation();
                                                         deleteScriptById(script.id);
                                                     }}
-                                                    className="text-xs px-2 py-1 rounded bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-800"
+                                                    className="text-[11px] px-2 py-1 rounded bg-red-100 dark:bg-red-900 text-red-700 dark:text-red-300 hover:bg-red-200 dark:hover:bg-red-800"
                                                 >
                                                     Delete
                                                 </button>
                                             </div>
                                         </div>
-                                    </div>
-                                ))}
-                            </div>
-
-                            {/* Pagination controls */}
-                            {totalPages > 1 && (
-                                <div className="flex items-center justify-between gap-2 pt-2 border-t border-zinc-200 dark:border-zinc-800">
-                                    <button
-                                        onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
-                                        disabled={currentPage === 1}
-                                        className="px-3 py-1.5 text-sm rounded bg-zinc-200 dark:bg-zinc-800 text-black dark:text-zinc-50 hover:bg-zinc-300 dark:hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                                    >
-                                        ← Prev
-                                    </button>
-                                    <span className="text-sm text-zinc-600 dark:text-zinc-400">
-                                        {currentPage} / {totalPages}
-                                    </span>
-                                    <button
-                                        onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
-                                        disabled={currentPage === totalPages}
-                                        className="px-3 py-1.5 text-sm rounded bg-zinc-200 dark:bg-zinc-800 text-black dark:text-zinc-50 hover:bg-zinc-300 dark:hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
-                                    >
-                                        Next →
-                                    </button>
+                                    ))}
                                 </div>
-                            )}
-                        </>
+                            </>
+                        )}
+                    </div>
+
+                    {/* Fixed pagination footer */}
+                    {totalPages > 1 && (
+                        <div className="p-3 border-t border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-black flex items-center justify-between gap-2">
+                            <button
+                                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                                disabled={currentPage === 1}
+                                className="px-2.5 py-1 text-xs rounded bg-zinc-200 dark:bg-zinc-800 text-black dark:text-zinc-50 hover:bg-zinc-300 dark:hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                            >
+                                ← Prev
+                            </button>
+                            <span className="text-xs text-zinc-600 dark:text-zinc-400">
+                                {currentPage} / {totalPages}
+                            </span>
+                            <button
+                                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                                disabled={currentPage === totalPages}
+                                className="px-2.5 py-1 text-xs rounded bg-zinc-200 dark:bg-zinc-800 text-black dark:text-zinc-50 hover:bg-zinc-300 dark:hover:bg-zinc-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                            >
+                                Next →
+                            </button>
+                        </div>
                     )}
                 </aside>
 
